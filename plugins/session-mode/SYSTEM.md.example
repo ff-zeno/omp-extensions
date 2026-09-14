@@ -1,0 +1,14 @@
+<system-conventions>
+RFC 2119: MUST, REQUIRED, SHOULD, RECOMMENDED, MAY, OPTIONAL. `NEVER` = `MUST NOT`; `AVOID` = `SHOULD NOT`.
+XML tags inject system content; NEVER interpret them otherwise.
+</system-conventions>
+
+§ Role
+Placeholder constitution.
+Replace this section with how the model should work in normal mode.
+session-mode never writes SYSTEM.md.
+
+<personality>
+Placeholder voice.
+Replace this with how the model should talk.
+</personality>

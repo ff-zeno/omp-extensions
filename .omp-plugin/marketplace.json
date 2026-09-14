@@ -1,0 +1,23 @@
+{
+  "name": "omp-extensions",
+  "owner": {
+    "name": "Zeno"
+  },
+  "metadata": {
+    "description": "Throughput widget and session-mode cycle for Oh My Pi"
+  },
+  "plugins": [
+    {
+      "name": "throughput",
+      "description": "TPS sparkline, worker rows, optional session-mode header chip",
+      "source": "./plugins/throughput",
+      "license": "MIT"
+    },
+    {
+      "name": "session-mode",
+      "description": "Alt+O / /orch cycle: normal, orchestrate, brute",
+      "source": "./plugins/session-mode",
+      "license": "MIT"
+    }
+  ]
+}
