@@ -1,0 +1,1296 @@
+# Pinned upstream: v18.4.6 (8b25ad4a05625dde65df41d057756b4815f4837c)
+# Adds API-v2 spawn metadata, keeps routed backups as the subagent retry chain, and re-exports getSupportedEfforts because compiled binaries do not resolve @oh-my-pi/pi-catalog for local extension files.
+
+diff --git a/docs/extensions.md b/docs/extensions.md
+index 1c7e3cefa..bbac35a05 100644
+--- a/docs/extensions.md
++++ b/docs/extensions.md
+@@ -477,6 +477,10 @@ and `/new`. Commands retain their explicit prefill and session-transition action
+ ### Subagent lifecycle
+ 
+ - `before_subagent_spawn` → `{ model?: string | string[]; block?: boolean; reason?: string; note?: string }`. Fires in the parent session exactly once per spawned child (`task`, eval `agent()`, workpool workers), at dispatch before the child resolves its model — never during a frontend's validation preflight, so stateful routers (round-robin, quota) advance once per child. The event carries `agent`, `invocationKind`, `modelRole` (the pre-expansion role alias, when any), the expanded `patterns` core would use, and an optional stable `spawnKey`. A returned `model` replaces the spawn's attempt-ordered patterns while keeping the role identity, so the remaining entries become the child's retry fallback chain; handlers run in extension order and the last returned `model` wins, along with its `note`, which the task UI shows as the spawn's routing reason on live, async, and settled rows. `block: true` refuses the spawn with `reason`. Cancelling the spawn releases an awaiting handler (its result is discarded and pending `ctx.ui` dialogs close) instead of holding the spawn until the handler timeout.
++  API v2 keeps routed backup patterns after the resolved primary in the subagent retry chain, including when a thinking-level decision pins the resolved model.
++  Explicit model requests and per-agent model overrides lock both model and effort; explicit effort requests lock effort.
++  `routing: "off"` bypasses the hook for task entries and eval agent/workpool calls.
++  Invalid or unsupported model/effort returns fail closed.
+ 
+ ### Reliability/runtime signals
+ 
+diff --git a/packages/coding-agent/CHANGELOG.md b/packages/coding-agent/CHANGELOG.md
+index 6d47d9731..1cfbf6f78 100644
+--- a/packages/coding-agent/CHANGELOG.md
++++ b/packages/coding-agent/CHANGELOG.md
+@@ -1,6 +1,7 @@
+ # Changelog
+ 
+ ## [Unreleased]
++- Extended `before_subagent_spawn` for lock-aware model and thinking-level routing, cancellation, explicit `routing: "off"` opt-out, and subagent routing API v2; routed backups remain the subagent retry chain.
+ 
+ ## [18.4.6] - 2026-10-01
+ 
+diff --git a/packages/coding-agent/src/eval/agent-bridge.ts b/packages/coding-agent/src/eval/agent-bridge.ts
+index ab279b734..b1967817a 100644
+--- a/packages/coding-agent/src/eval/agent-bridge.ts
++++ b/packages/coding-agent/src/eval/agent-bridge.ts
+@@ -28,19 +28,20 @@ const agentArgsSchema = type({
+ 	"label?": "string",
+ 	"schema?": "unknown",
+ 	"schemaMode?": "'permissive' | 'strict'",
++	"routing?": "'auto' | 'off'",
+ 	"isolated?": "boolean",
+ 	"apply?": "boolean",
+ 	"merge?": "boolean",
+ 	"tools?": "string[]",
+ 	"+": "delete",
+ });
+-
+ interface EvalAgentArgs {
+ 	prompt: string;
+ 	agent?: string;
+ 	label?: string;
+ 	schema?: unknown;
+ 	schemaMode?: StructuredSubagentSchemaMode;
++	routing?: "auto" | "off";
+ 	isolated?: boolean;
+ 	apply?: boolean;
+ 	merge?: boolean;
+@@ -189,12 +190,12 @@ export async function runEvalAgent(args: unknown, options: EvalAgentBridgeOption
+ 	const customTools = parsed.tools?.length
+ 		? createEvalCustomTools(options.session, await describeEvalTools(options.session, parsed.tools, options.signal))
+ 		: undefined;
+-
+ 	try {
+ 		const policy = await resolveEffectiveSubagentPolicy({
+ 			session: options.session,
+ 			invocationKind: "eval",
+ 			assignment: parsed.prompt,
++			...(parsed.routing !== undefined ? { routing: parsed.routing } : {}),
+ 			...(parsed.agent !== undefined ? { agent: parsed.agent } : {}),
+ 			...(Object.hasOwn(parsed, "schema") ? { outputSchema: parsed.schema } : {}),
+ 			...(parsed.schemaMode !== undefined ? { schemaMode: parsed.schemaMode } : {}),
+@@ -218,6 +219,7 @@ export async function runEvalAgent(args: unknown, options: EvalAgentBridgeOption
+ 						session: options.session,
+ 						invocationKind: "eval",
+ 						assignment: parsed.prompt,
++						...(parsed.routing !== undefined ? { routing: parsed.routing } : {}),
+ 						...(parsed.agent !== undefined ? { agent: parsed.agent } : {}),
+ 						...(Object.hasOwn(parsed, "schema") ? { outputSchema: parsed.schema } : {}),
+ 						...(parsed.schemaMode !== undefined ? { schemaMode: parsed.schemaMode } : {}),
+diff --git a/packages/coding-agent/src/eval/js/shared/prelude.txt b/packages/coding-agent/src/eval/js/shared/prelude.txt
+index 394fe45a9..dcc63366a 100644
+--- a/packages/coding-agent/src/eval/js/shared/prelude.txt
++++ b/packages/coding-agent/src/eval/js/shared/prelude.txt
+@@ -437,8 +437,8 @@ if (!globalThis.__omp_js_prelude_loaded__) {
+ 				"agent",
+ 				opts,
+ 				rest,
+-				["agent", "label", "schema", "isolated", "apply", "merge", "schemaMode", "tools"],
+-				"{ agent, label, schema, schemaMode, isolated, apply, merge, tools }",
++				["agent", "label", "schema", "isolated", "apply", "merge", "schemaMode", "tools", "routing"],
++				"{ agent, label, schema, schemaMode, isolated, apply, merge, tools, routing }",
+ 			);
+ 			const result = await globalThis.__omp_call_tool__("__agent__", { prompt, ...options });
+ 			if (!result || typeof result.id !== "string") throw new Error("agent() did not return a handle");
+@@ -501,8 +501,8 @@ if (!globalThis.__omp_js_prelude_loaded__) {
+ 			"workpool",
+ 			opts,
+ 			rest,
+-			["name", "context", "tools"],
+-			"{ name, context, tools }",
++			["name", "context", "tools", "routing"],
++			"{ name, context, tools, routing }",
+ 		);
+ 		const result = await globalThis.__omp_call_tool__("__workpool__", {
+ 			op: "create",
+diff --git a/packages/coding-agent/src/eval/py/prelude.py b/packages/coding-agent/src/eval/py/prelude.py
+index 04324beb0..8a5149055 100644
+--- a/packages/coding-agent/src/eval/py/prelude.py
++++ b/packages/coding-agent/src/eval/py/prelude.py
+@@ -1001,6 +1001,7 @@ if "__omp_prelude_loaded__" not in globals():
+         apply=None,
+         merge=None,
+         tools=None,
++        routing=None,
+     ):
+         """Start a background subagent and return its handle."""
+         args = {"prompt": prompt}
+@@ -1020,6 +1021,8 @@ if "__omp_prelude_loaded__" not in globals():
+             args["merge"] = bool(merge)
+         if tools is not None:
+             args["tools"] = list(tools)
++        if routing is not None:
++            args["routing"] = routing
+         result = _bridge_call("__agent__", args)
+         if not isinstance(result, dict) or not isinstance(result.get("id"), str):
+             raise RuntimeError("agent() did not return a handle")
+@@ -1065,7 +1068,7 @@ if "__omp_prelude_loaded__" not in globals():
+         def __repr__(self):
+             return f"<workpool {self.name} ({self.agent}) {self.limit} agents>"
+ 
+-    def workpool(agent=None, *, name=None, context=None, tools=None):
++    def workpool(agent=None, *, name=None, context=None, tools=None, routing=None):
+         """Create a pool of keep-alive subagents."""
+         args = {"op": "create"}
+         if agent is not None:
+@@ -1076,6 +1079,8 @@ if "__omp_prelude_loaded__" not in globals():
+             args["context"] = context
+         if tools is not None:
+             args["tools"] = list(tools)
++        if routing is not None:
++            args["routing"] = routing
+         result = _bridge_call("__workpool__", args)
+         if not isinstance(result, dict) or not isinstance(result.get("name"), str):
+             raise RuntimeError("workpool() did not return a pool")
+diff --git a/packages/coding-agent/src/eval/workpool-bridge.ts b/packages/coding-agent/src/eval/workpool-bridge.ts
+index b60a71561..05d1e81c9 100644
+--- a/packages/coding-agent/src/eval/workpool-bridge.ts
++++ b/packages/coding-agent/src/eval/workpool-bridge.ts
+@@ -54,6 +54,14 @@ function optionalTools(args: Record<string, unknown>): string[] | undefined {
+ 	}
+ 	return args.tools;
+ }
++function optionalRouting(args: Record<string, unknown>): "auto" | "off" | undefined {
++	const value = args.routing;
++	if (value === undefined) return undefined;
++	if (value !== "auto" && value !== "off") {
++		throw new ToolError('workpool routing must be "auto" or "off"');
++	}
++	return value;
++}
+ 
+ function getPool(options: EvalWorkpoolBridgeOptions, name: string) {
+ 	const ownerId = options.session.getAgentId?.() ?? MAIN_AGENT_ID;
+@@ -61,7 +69,6 @@ function getPool(options: EvalWorkpoolBridgeOptions, name: string) {
+ 	if (!pool) throw new ToolError(`unknown workpool "${name}"`);
+ 	return pool;
+ }
+-
+ /** Create or operate a process-local pool of keep-alive subagents. */
+ export async function runEvalWorkpool(args: unknown, options: EvalWorkpoolBridgeOptions): Promise<EvalWorkpoolResult> {
+ 	const record = requireRecord(args);
+@@ -73,6 +80,7 @@ export async function runEvalWorkpool(args: unknown, options: EvalWorkpoolBridge
+ 		const requestedName = optionalString(record, "name");
+ 		const context = optionalString(record, "context");
+ 		const tools = optionalTools(record);
++		const routing = optionalRouting(record);
+ 		if (tools?.length && options.session.getPlanModeState?.()?.enabled === true) {
+ 			throw new ToolError("Eval-defined tools are unavailable in plan mode.");
+ 		}
+@@ -81,6 +89,7 @@ export async function runEvalWorkpool(args: unknown, options: EvalWorkpoolBridge
+ 			invocationKind: "eval",
+ 			assignment: `Create workpool ${requestedName ?? agent ?? "worker"}`,
+ 			...(agent ? { agent } : {}),
++			...(routing !== undefined ? { routing } : {}),
+ 		});
+ 		const customTools = tools?.length
+ 			? createEvalCustomTools(options.session, await describeEvalTools(options.session, tools, options.signal))
+@@ -100,6 +109,7 @@ export async function runEvalWorkpool(args: unknown, options: EvalWorkpoolBridge
+ 			policy,
+ 			...(context ? { context } : {}),
+ 			customTools,
++			...(routing !== undefined ? { routing } : {}),
+ 		});
+ 		options.emitStatus?.({ op: "workpool", action: "create", pool: name, count: pool.limit() });
+ 		return { name, agent: policy.agentName, limit: pool.limit() };
+diff --git a/packages/coding-agent/src/extensibility/extensions/runner.ts b/packages/coding-agent/src/extensibility/extensions/runner.ts
+index d92618969..f250f465a 100644
+--- a/packages/coding-agent/src/extensibility/extensions/runner.ts
++++ b/packages/coding-agent/src/extensibility/extensions/runner.ts
+@@ -1508,8 +1508,12 @@ export class ExtensionRunner {
+ 								handlerSignal,
+ 								event.type === "tool_call" ? budget : undefined,
+ 							);
++							const handlerEvent =
++								event.type === "before_subagent_spawn"
++									? ({ ...event, signal: handlerSignal } as TEvent)
++									: event;
+ 							result = await this.#toolRegistrationScope.run(registrationScope, () =>
+-								handler(event, handlerContext),
++								handler(handlerEvent, handlerContext),
+ 							);
+ 						} catch (error) {
+ 							handlerFailure = { error };
+@@ -2133,7 +2137,7 @@ export class ExtensionRunner {
+ 	): Promise<BeforeSubagentSpawnEventResult | undefined> {
+ 		if (!this.hasHandlers("before_subagent_spawn")) return undefined;
+ 		const ctx = this.createContext();
+-		let chosen: Pick<BeforeSubagentSpawnEventResult, "model" | "note"> | undefined;
++		let chosen: Pick<BeforeSubagentSpawnEventResult, "model" | "note" | "thinkingLevel"> | undefined;
+ 
+ 		for (const ext of this.extensions) {
+ 			const handlers = ext.handlers.get("before_subagent_spawn");
+@@ -2146,13 +2150,17 @@ export class ExtensionRunner {
+ 					ctx,
+ 					ext,
+ 					extensionHandlerTimeoutMs,
+-					undefined,
++					(kind, message) => ({
++						block: true,
++						reason: `before_subagent_spawn handler ${kind}: ${message}`,
++					}),
+ 					signal,
+ 				);
+ 				if (!handlerResult) continue;
+ 				const result = handlerResult as BeforeSubagentSpawnEventResult;
+ 				if (result.block) return result;
+-				if (result.model !== undefined) chosen = { model: result.model, note: result.note };
++				if (result.model !== undefined) chosen = { ...chosen, model: result.model, note: result.note };
++				if (result.thinkingLevel !== undefined) chosen = { ...chosen, thinkingLevel: result.thinkingLevel };
+ 			}
+ 		}
+ 
+diff --git a/packages/coding-agent/src/extensibility/extensions/types.ts b/packages/coding-agent/src/extensibility/extensions/types.ts
+index 27d60136c..6fbf961f5 100644
+--- a/packages/coding-agent/src/extensibility/extensions/types.ts
++++ b/packages/coding-agent/src/extensibility/extensions/types.ts
+@@ -764,6 +764,8 @@ export interface ResourcesDiscoverResult {
+ 	themePaths?: string[];
+ }
+ 
++/** Public compatibility marker for the subagent-routing extension seam. */
++export const SUBAGENT_ROUTING_API_VERSION = 2 as const;
+ // ============================================================================
+ // Session Events (shared with hooks subsystem)
+ // ============================================================================
+@@ -829,6 +831,20 @@ export interface BeforeSubagentSpawnEvent {
+ 	/** Agent definition name being spawned. */
+ 	agent: string;
+ 	invocationKind: "task" | "eval";
++	/** Assignment dispatched to this worker. */
++	assignment: string;
++	/** Shared batch/workpool context, when present. */
++	context?: string;
++	/** Baseline model patterns selected for this worker. */
++	model?: string | string[];
++	/** Baseline thinking level selected for this worker. */
++	thinkingLevel?: ThinkingLevel;
++	/** Explicit model request or per-agent model override prevents model routing. */
++	modelLocked: boolean;
++	/** Explicit effort request or model lock prevents effort routing. */
++	effortLocked: boolean;
++	/** Aborts when the invocation is cancelled or this handler's timeout expires. */
++	signal?: AbortSignal;
+ 	/** Pre-expansion role alias the patterns came from (`@task` -> "task"); undefined for explicit selectors. */
+ 	modelRole?: string;
+ 	/** Expanded model patterns core would spawn with, in attempt order. */
+@@ -1273,6 +1289,7 @@ export interface BeforeAgentStartEventResult {
+ export interface BeforeSubagentSpawnEventResult {
+ 	/** Replacement model patterns in attempt order (selectors or role aliases). Role identity is preserved. */
+ 	model?: string | string[];
++	thinkingLevel?: ThinkingLevel;
+ 	/** Refuse the spawn. */
+ 	block?: boolean;
+ 	/** Refusal reason surfaced to the caller. */
+diff --git a/packages/coding-agent/src/index.ts b/packages/coding-agent/src/index.ts
+index 8f8db4b27..4fb20ae7d 100644
+--- a/packages/coding-agent/src/index.ts
++++ b/packages/coding-agent/src/index.ts
+@@ -23,6 +23,9 @@ export * from "./extensibility/custom-tools";
+ export type * from "./extensibility/extensions";
+ // Extension types and utilities
+ export * from "./extensibility/extensions";
++export { SUBAGENT_ROUTING_API_VERSION } from "./extensibility/extensions";
++// Routing extensions fit effort to the bound model; compiled binaries do not resolve @oh-my-pi/pi-catalog for local extension files.
++export { getSupportedEfforts } from "@oh-my-pi/pi-catalog/model-thinking";
+ // Hook system types (legacy re-export)
+ // Skills
+ export * from "./extensibility/skills";
+diff --git a/packages/coding-agent/src/modes/controllers/extension-ui-controller.ts b/packages/coding-agent/src/modes/controllers/extension-ui-controller.ts
+index 1314db123..80b0e7a48 100644
+--- a/packages/coding-agent/src/modes/controllers/extension-ui-controller.ts
++++ b/packages/coding-agent/src/modes/controllers/extension-ui-controller.ts
+@@ -598,6 +598,7 @@ export class ExtensionUiController {
+ 		this.ctx.ui.requestRender();
+ 	}
+ 
++
+ 	async showCollabAwareSelector(
+ 		title: string,
+ 		options: ExtensionUISelectItem[],
+diff --git a/packages/coding-agent/src/session/turn-recovery.ts b/packages/coding-agent/src/session/turn-recovery.ts
+index ad84ed5be..0a95bdcc1 100644
+--- a/packages/coding-agent/src/session/turn-recovery.ts
++++ b/packages/coding-agent/src/session/turn-recovery.ts
+@@ -1761,7 +1761,13 @@ export class TurnRecovery {
+ 		currentModel: Model | null | undefined = this.#host.model(),
+ 		options?: { pinnedRole?: string; roleHint?: string },
+ 	): string[] {
+-		const pinned = options?.pinnedRole ?? this.#activeRetryFallback?.role;
++		const roleHint = options?.roleHint ?? this.#liveRetryRoleHint(currentModel);
++		// A subagent's task-specific chain must be consulted before a model-keyed
++		// chain for the same primary. Other sessions retain model-key precedence.
++		const pinned =
++			options?.pinnedRole ??
++			this.#activeRetryFallback?.role ??
++			(roleHint?.startsWith("subagent:") ? roleHint : undefined);
+ 		const current = this.resolveRetryFallbackRole(currentSelector, currentModel, options?.roleHint);
+ 		if (!pinned) return current ? [current] : [];
+ 		return current && current !== pinned ? [pinned, current] : [pinned];
+diff --git a/packages/coding-agent/src/task/executor.ts b/packages/coding-agent/src/task/executor.ts
+index 3b4fa4454..1d76e4b18 100644
+--- a/packages/coding-agent/src/task/executor.ts
++++ b/packages/coding-agent/src/task/executor.ts
+@@ -304,10 +304,15 @@ function installSubagentRetryFallbackChain(args: {
+ 	);
+ 	if (selectedIndex < 0) return undefined;
+ 	const fallbackSelectors = candidates.slice(selectedIndex + 1).map(candidate => candidate.selector);
+-	// A single configured model may reuse its role's (or the default) configured chain, but never an implicit parent fallback.
+-	const fallbackChain = fallbackSelectors.length > 0 ? fallbackSelectors : inheritedFallbackChain;
++	// Routed candidates take priority; append the resolved primary's model-key chain after them.
++	const configuredModelChain = cfgRetryFallbackChains.get(settings)[candidates[selectedIndex].selector];
++	const fallbackChain = Array.from(
++		new Set([
++			...(fallbackSelectors.length > 0 ? fallbackSelectors : inheritedFallbackChain ?? []),
++			...(configuredModelChain ?? []),
++		]),
++	);
+ 	if (
+-		!Array.isArray(fallbackChain) ||
+ 		fallbackChain.length === 0 ||
+ 		!fallbackChain.every(entry => typeof entry === "string")
+ 	) {
+diff --git a/packages/coding-agent/src/task/index.ts b/packages/coding-agent/src/task/index.ts
+index bce797cc4..fb1de3e04 100644
+--- a/packages/coding-agent/src/task/index.ts
++++ b/packages/coding-agent/src/task/index.ts
+@@ -226,8 +226,14 @@ function validateShapeParams(batchEnabled: boolean, params: TaskParams): string
+  * undefined when valid.
+  */
+ 
++/** Reject invalid routing selectors on internal/stale-transcript calls that bypass the wire schema. */
++function validateRouting(routing: TaskParams["routing"] | undefined, label: string): string | undefined {
++	if (routing === undefined || routing === "auto" || routing === "off") return undefined;
++	return `${label} has an invalid \`routing\` value ${JSON.stringify(routing)}. Use "auto" or "off".`;
++}
++
+ /** Reject an out-of-range `effort` selector on internal/stale-transcript calls that bypass the wire schema. */
+-function validateEffort(effort: TaskEffort | undefined, label: string): string | undefined {
++function validateEffort(effort: TaskParams["effort"] | undefined, label: string): string | undefined {
+ 	if (effort === undefined || TASK_EFFORTS.includes(effort)) return undefined;
+ 	return `${label} has an invalid \`effort\` value ${JSON.stringify(effort)}. Use "lo", "med", or "hi".`;
+ }
+@@ -249,6 +255,8 @@ function validateSpawnParams(params: TaskParams, batchEnabled: boolean): string
+ 			}
+ 			const effortError = validateEffort(item.effort, `Task ${i + 1}${item.name ? ` (\`${item.name}\`)` : ""}`);
+ 			if (effortError) return effortError;
++			const routingError = validateRouting(item.routing, `Task ${i + 1}${item.name ? ` (\`${item.name}\`)` : ""}`);
++			if (routingError) return routingError;
+ 		}
+ 		const seen = new Map<string, string>();
+ 		for (const item of tasks) {
+@@ -271,7 +279,7 @@ function validateSpawnParams(params: TaskParams, batchEnabled: boolean): string
+ 			? "Missing `tasks`. Provide a `tasks` array (one subagent per item) with a shared `context`."
+ 			: "Missing `task`. Provide complete, self-contained instructions for the agent.";
+ 	}
+-	return validateEffort(params.effort, "The call");
++	return validateRouting(params.routing, "The call") ?? validateEffort(params.effort, "The call");
+ }
+ 
+ /**
+@@ -290,7 +298,7 @@ function resolveSpawnItems(params: TaskParams): TaskItem[] {
+ 	if ("schemaMode" in params) item.schemaMode = params.schemaMode;
+ 	if ("tools" in params) item.tools = params.tools;
+ 	if ("effort" in params) item.effort = params.effort;
+-	if ("isolated" in params) item.isolated = params.isolated;
++	if ("routing" in params) item.routing = params.routing;
+ 	return [item];
+ }
+ 
+@@ -313,6 +321,7 @@ function spawnParamsFor(params: TaskParams, item: TaskItem, defaultAgent: string
+ 	if ("schemaMode" in item) spawn.schemaMode = item.schemaMode;
+ 	if ("tools" in item) spawn.tools = item.tools;
+ 	if ("effort" in item) spawn.effort = item.effort;
++	if ("routing" in item) spawn.routing = item.routing;
+ 	if (item.isolated !== undefined) {
+ 		spawn.isolated = item.isolated;
+ 	} else if ("isolated" in params) {
+@@ -1607,6 +1616,7 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
+ 				assignment,
+ 				context,
+ 				agent: params.agent,
++				...(Object.hasOwn(params, "routing") ? { routing: params.routing } : {}),
+ 				...(Object.hasOwn(params, "outputSchema") ? { outputSchema: params.outputSchema } : {}),
+ 				...(Object.hasOwn(params, "schemaMode") ? { schemaMode: params.schemaMode } : {}),
+ 				...(params.effort !== undefined ? { effort: params.effort } : {}),
+diff --git a/packages/coding-agent/src/task/structured-subagent.ts b/packages/coding-agent/src/task/structured-subagent.ts
+index 1535dff15..ca336c040 100644
+--- a/packages/coding-agent/src/task/structured-subagent.ts
++++ b/packages/coding-agent/src/task/structured-subagent.ts
+@@ -7,9 +7,18 @@
+ import * as fs from "node:fs/promises";
+ import * as os from "node:os";
+ import path from "node:path";
++import type { Model } from "@oh-my-pi/pi-ai";
++import { getSupportedEfforts } from "@oh-my-pi/pi-catalog/model-thinking";
++import { ThinkingLevel, type ThinkingLevel as ThinkingLevelType } from "@oh-my-pi/pi-agent-core/thinking";
++import { concreteThinkingLevel, toReasoningEffort } from "@oh-my-pi/pi-tui/thinking";
+ import { $env, prompt, Snowflake } from "@oh-my-pi/pi-utils";
+ import { shortenPath } from "@oh-my-pi/pi-tui/render/render-utils";
+-import { resolveAgentModelSelection, resolveConfiguredModelPatterns } from "../config/model-resolver";
++import {
++	formatModelStringWithRouting,
++	resolveAgentModelSelection,
++	resolveConfiguredModelPatterns,
++	resolveModelOverride,
++} from "../config/model-resolver";
+ import {
+ 	type CompactionThresholdPair,
+ 	validateAgentCompactionThresholdOverrides,
+@@ -106,7 +115,8 @@ export interface StructuredSubagentRequest {
+ 	context?: string;
+ 	agent?: string;
+ 	model?: string | string[];
+-	/** Presence, rather than truthiness, makes this the highest-priority schema. */
++	/** `off` bypasses extension routing for an explicit caller-selected worker. */
++	routing?: "auto" | "off";
+ 	outputSchema?: unknown;
+ 	schemaMode?: StructuredSubagentSchemaMode;
+ 	/** Per-spawn thinking effort mapped onto the resolved model's supported range; overrides the agent's default selector. */
+@@ -394,6 +404,48 @@ export async function resolveEffectiveSubagentPolicy(
+ 	};
+ }
+ 
++function hasNonEmptyModelOverride(value: unknown): boolean {
++	if (typeof value === "string") return value.trim().length > 0;
++	return Array.isArray(value) && value.some(pattern => typeof pattern === "string" && pattern.trim().length > 0);
++}
++
++function resolveRoutingModel(request: StructuredSubagentRequest, patterns: string[]): Model | undefined {
++	const registry = request.session.modelRegistry;
++	if (!registry) {
++		throw new StructuredSubagentError(
++			"preflight",
++			"before_subagent_spawn returned a model, but this session has no model registry",
++		);
++	}
++	const resolved = resolveModelOverride(patterns, registry, request.session.settings);
++	if (!resolved.model) {
++		throw new StructuredSubagentError(
++			"preflight",
++			`before_subagent_spawn returned unsupported model "${patterns.join(", ")}"`,
++		);
++	}
++	return resolved.model;
++}
++
++function validateRoutingThinkingLevel(level: unknown, model: Model | undefined): asserts level is ThinkingLevelType {
++	const validLevel = Object.values(ThinkingLevel).find(value => value === level);
++	if (validLevel === undefined) {
++		throw new StructuredSubagentError(
++			"preflight",
++			`before_subagent_spawn returned invalid thinking level ${JSON.stringify(level)}`,
++		);
++	}
++	if (level === ThinkingLevel.Off || level === ThinkingLevel.Inherit) return;
++	const effort = toReasoningEffort(validLevel);
++	if (!effort || !model || !getSupportedEfforts(model).includes(effort)) {
++		const modelName = model ? `${model.provider}/${model.id}` : "the selected model";
++		throw new StructuredSubagentError(
++			"preflight",
++			`before_subagent_spawn returned unsupported thinking level "${level}" for ${modelName}`,
++		);
++	}
++}
++
+ /**
+  * Fire `before_subagent_spawn` for an actual child dispatch. Kept out of
+  * {@link resolveEffectiveSubagentPolicy} because frontends run that as a
+@@ -404,30 +456,110 @@ async function applySpawnHook(
+ 	request: StructuredSubagentRequest,
+ 	policy: EffectiveSubagentPolicy,
+ ): Promise<EffectiveSubagentPolicy> {
++	if (request.routing === "off") return policy;
+ 	const emit = request.session.emitBeforeSubagentSpawn;
+ 	if (!emit) return policy;
+ 	const spawnKey =
+ 		request.identity?.id ??
+ 		request.identity?.label ??
+ 		(request.parentToolCallId !== undefined ? `${request.parentToolCallId}:${request.index ?? 0}` : undefined);
+-	const spawnResult = await emit(
++	const agentModelOverrides = cfgTaskAgentModelOverrides.get(request.session.settings);
++	const modelLocked = request.model !== undefined || hasNonEmptyModelOverride(agentModelOverrides[policy.agentName]);
++	const effortLocked = request.effort !== undefined || modelLocked;
++	const baselineThinkingLevel = concreteThinkingLevel(policy.effectiveAgent.thinkingLevel);
++	const decision = await emit(
+ 		{
+ 			type: "before_subagent_spawn",
+ 			agent: policy.agentName,
+ 			invocationKind: request.invocationKind,
++			assignment: request.assignment,
++			...(request.context?.trim() ? { context: request.context.trim() } : {}),
++			...(policy.modelOverride ? { model: policy.modelOverride } : {}),
++			thinkingLevel: baselineThinkingLevel,
++			modelLocked,
++			effortLocked,
+ 			modelRole: policy.modelRole,
+ 			patterns: policy.modelOverride ?? [],
+ 			spawnKey,
+ 		},
+ 		request.signal,
+ 	);
+-	if (spawnResult?.block) {
+-		throw new StructuredSubagentError("preflight", spawnResult.reason ?? "Subagent spawn blocked by extension.");
++	if (decision === undefined) return policy;
++	if (typeof decision !== "object" || decision === null || Array.isArray(decision)) {
++		throw new StructuredSubagentError("preflight", "before_subagent_spawn returned an invalid result");
++	}
++	if (decision.block !== undefined && typeof decision.block !== "boolean") {
++		throw new StructuredSubagentError("preflight", "before_subagent_spawn returned an invalid block value");
++	}
++	if (decision.reason !== undefined && typeof decision.reason !== "string") {
++		throw new StructuredSubagentError("preflight", "before_subagent_spawn returned an invalid reason");
++	}
++	if (
++		decision.model !== undefined &&
++		(typeof decision.model !== "string" &&
++			(!Array.isArray(decision.model) ||
++				decision.model.length === 0 ||
++				!decision.model.every(pattern => typeof pattern === "string" && pattern.trim().length > 0)))
++	) {
++		throw new StructuredSubagentError("preflight", "before_subagent_spawn returned an invalid model");
++	}
++	if (decision.thinkingLevel !== undefined && typeof decision.thinkingLevel !== "string") {
++		throw new StructuredSubagentError("preflight", "before_subagent_spawn returned an invalid thinking level");
++	}
++	if (decision.block === true) {
++		throw new StructuredSubagentError(
++			"preflight",
++			decision.reason?.trim() || "Subagent spawn blocked by extension policy.",
++		);
++	}
++
++	const replacement =
++		decision.model === undefined
++			? undefined
++			: resolveConfiguredModelPatterns(decision.model, request.session.settings);
++	if (replacement && replacement.length === 0) {
++		throw new StructuredSubagentError("preflight", "before_subagent_spawn returned an unsupported model");
++	}
++	const registry = request.session.modelRegistry;
++	const routedModel =
++		replacement && (registry !== undefined || decision.thinkingLevel !== undefined)
++			? resolveRoutingModel(request, replacement)
++			: undefined;
++	const baselineModel =
++		(policy.modelOverride?.length && registry
++			? resolveModelOverride(policy.modelOverride, registry, request.session.settings).model
++			: undefined) ?? request.session.getActiveModel?.();
++	const appliedModel = routedModel !== undefined && !modelLocked ? routedModel : baselineModel;
++	if (decision.thinkingLevel !== undefined) {
++		validateRoutingThinkingLevel(decision.thinkingLevel, appliedModel);
++	}
++
++	const nextPolicy: EffectiveSubagentPolicy = { ...policy };
++	if (replacement !== undefined && !modelLocked) {
++		nextPolicy.modelOverride = replacement;
++		nextPolicy.modelRoute = decision.note;
++	}
++	if (decision.thinkingLevel !== undefined && decision.thinkingLevel !== ThinkingLevel.Inherit && !effortLocked) {
++		// Pin the resolved model so an inherited selector suffix cannot override the chosen effort.
++		if (appliedModel) {
++			const appliedModelRoute = formatModelStringWithRouting(appliedModel);
++			const appliedModelIndex =
++				replacement?.findIndex(pattern => {
++					const resolved = registry ? resolveModelOverride([pattern], registry, request.session.settings).model : undefined;
++					return resolved !== undefined && formatModelStringWithRouting(resolved) === appliedModelRoute;
++				}) ?? -1;
++			nextPolicy.modelOverride = [
++				appliedModelRoute,
++				...(appliedModelIndex >= 0 && replacement ? replacement.slice(appliedModelIndex + 1) : []),
++			];
++			nextPolicy.modelRole = undefined;
++		}
++		nextPolicy.effectiveAgent = {
++			...policy.effectiveAgent,
++			thinkingLevel: decision.thinkingLevel,
++		};
+ 	}
+-	if (spawnResult?.model === undefined) return policy;
+-	const replacement = resolveConfiguredModelPatterns(spawnResult.model, request.session.settings);
+-	if (replacement.length === 0) return policy;
+-	return { ...policy, modelOverride: replacement, modelRoute: spawnResult.note };
++	return nextPolicy;
+ }
+ 
+ /** Reserve a session-global agent id only after preflight has succeeded. */
+diff --git a/packages/coding-agent/src/task/types.ts b/packages/coding-agent/src/task/types.ts
+index 00863b852..68d0889fb 100644
+--- a/packages/coding-agent/src/task/types.ts
++++ b/packages/coding-agent/src/task/types.ts
+@@ -44,11 +44,13 @@ export interface SubagentEventPayload {
+ const outputSchemaInputSchema = type("object | boolean | string | null");
+ // Coarse per-spawn thinking effort; must stay in sync with TASK_EFFORTS in ../thinking.
+ const effortRule = '"lo" | "med" | "hi"' as const;
++const routingRule = '"auto" | "off"' as const;
+ 
+ export const taskItemSchema = type({
+ 	"name?": "string",
+ 	agent: "string = 'task'",
+ 	task: "string",
++	"routing?": routingRule,
+ 	solutionSpace: "string",
+ 	"outputSchema?": outputSchemaInputSchema,
+ 	"schemaMode?": '"permissive" | "strict"',
+@@ -60,6 +62,7 @@ const taskItemSchemaIsolated = type({
+ 	agent: "string = 'task'",
+ 	task: "string",
+ 	solutionSpace: "string",
++	"routing?": routingRule,
+ 	"outputSchema?": outputSchemaInputSchema,
+ 	"schemaMode?": '"permissive" | "strict"',
+ 	"tools?": "string[]",
+@@ -72,6 +75,7 @@ export const taskSchema = type({
+ 	agent: "string = 'task'",
+ 	task: "string",
+ 	solutionSpace: "string",
++	"routing?": routingRule,
+ 	"outputSchema?": outputSchemaInputSchema,
+ 	"schemaMode?": '"permissive" | "strict"',
+ 	"tools?": "string[]",
+@@ -82,6 +86,7 @@ const taskSchemaNoIsolation = type({
+ 	"name?": "string",
+ 	agent: "string = 'task'",
+ 	task: "string",
++	"routing?": routingRule,
+ 	solutionSpace: "string",
+ 	"outputSchema?": outputSchemaInputSchema,
+ 	"schemaMode?": '"permissive" | "strict"',
+@@ -133,6 +138,7 @@ function createTaskSchema(options: {
+ 				agent,
+ 				task: "string",
+ 				solutionSpace: "string",
++				"routing?": routingRule,
+ 				...effortField,
+ 				"outputSchema?": outputSchemaInputSchema,
+ 				"schemaMode?": '"permissive" | "strict"',
+@@ -151,6 +157,7 @@ function createTaskSchema(options: {
+ 			agent,
+ 			task: "string",
+ 			solutionSpace: "string",
++			"routing?": routingRule,
+ 			...effortField,
+ 			"outputSchema?": outputSchemaInputSchema,
+ 			"schemaMode?": '"permissive" | "strict"',
+@@ -169,6 +176,7 @@ function createTaskSchema(options: {
+ 			agent,
+ 			task: "string",
+ 			solutionSpace: "string",
++			"routing?": routingRule,
+ 			...effortField,
+ 			"outputSchema?": outputSchemaInputSchema,
+ 			"schemaMode?": '"permissive" | "strict"',
+@@ -181,6 +189,7 @@ function createTaskSchema(options: {
+ 		"name?": "string",
+ 		agent,
+ 		task: "string",
++		"routing?": routingRule,
+ 		solutionSpace: "string",
+ 		...effortField,
+ 		"outputSchema?": outputSchemaInputSchema,
+diff --git a/packages/coding-agent/src/task/workpool.ts b/packages/coding-agent/src/task/workpool.ts
+index e35e07cde..120906c16 100644
+--- a/packages/coding-agent/src/task/workpool.ts
++++ b/packages/coding-agent/src/task/workpool.ts
+@@ -85,12 +85,13 @@ export interface WorkPoolPeekResult {
+ 	pending: number;
+ }
+ 
+-/** Resolved policy and optional shared context used to create a pool. */
+ export interface WorkPoolCreateOptions {
+ 	name: string;
+ 	policy: EffectiveSubagentPolicy;
+ 	context?: string;
+ 	customTools?: CustomTool[];
++	/** Extension model routing mode used for each worker's first turn. */
++	routing?: "auto" | "off";
+ }
+ 
+ interface TurnOutcome {
+@@ -111,9 +112,10 @@ export class WorkPool {
+ 	readonly policy: EffectiveSubagentPolicy;
+ 	readonly context?: string;
+ 	readonly customTools: CustomTool[];
++	readonly routing: "auto" | "off";
+ 	readonly freshAgents: boolean;
+-	readonly agents: WorkPoolAgent[] = [];
+ 	readonly items: WorkPoolItem[] = [];
++	readonly agents: WorkPoolAgent[] = [];
+ 	readonly batches: WorkPoolBatch[] = [];
+ 	closed = false;
+ 	rrCursor = 0;
+@@ -130,6 +132,7 @@ export class WorkPool {
+ 		this.name = options.name;
+ 		this.ownerId = session.getAgentId?.() ?? MAIN_AGENT_ID;
+ 		this.session = session;
++		this.routing = options.routing ?? "auto";
+ 		this.policy = options.policy;
+ 		this.context = options.context;
+ 		this.customTools = options.customTools ?? [];
+@@ -383,6 +386,7 @@ export class WorkPool {
+ 							assignment: message,
+ 							...(this.context ? { context: this.context } : {}),
+ 							agent: this.policy.agentName,
++							routing: this.routing,
+ 							identity: { id: agent.id },
+ 							customTools: this.customTools,
+ 							outputSchema,
+diff --git a/packages/coding-agent/test/agent-session-prewalk.test.ts b/packages/coding-agent/test/agent-session-prewalk.test.ts
+index a37fe770d..6c0ff814c 100644
+--- a/packages/coding-agent/test/agent-session-prewalk.test.ts
++++ b/packages/coding-agent/test/agent-session-prewalk.test.ts
+@@ -1096,4 +1096,5 @@ describe("AgentSession prewalk", () => {
+ 		expect(session.isAutoThinking).toBe(false);
+ 		expect(notices.some(message => message.includes("nothing to switch"))).toBe(false);
+ 	});
++
+ });
+diff --git a/packages/coding-agent/test/agent-session-retry-fallback.test.ts b/packages/coding-agent/test/agent-session-retry-fallback.test.ts
+index ca9b315e3..d8781f891 100644
+--- a/packages/coding-agent/test/agent-session-retry-fallback.test.ts
++++ b/packages/coding-agent/test/agent-session-retry-fallback.test.ts
+@@ -5529,6 +5529,130 @@ describe("AgentSession retry fallback", () => {
+ 		expect(session.model?.id).toBe(primaryModel.id);
+ 		expect(session.thinkingLevel).toBeUndefined();
+ 	});
++	it("walks a routed subagent chain before a matching model-key chain", async () => {
++		const routedModel = getBundledModel("openai-codex", "gpt-5.6-sol");
++		const configuredModel = getBundledModel("openai-codex", "gpt-5.6-luna");
++		if (!routedModel || !configuredModel) {
++			throw new Error("Expected bundled Codex rollover models to exist");
++		}
++		const primary = buildModel({
++			provider: "generic-test-provider",
++			id: "routing-test-model",
++			name: "Routing Test Model",
++			api: "openai-completions",
++			baseUrl: "https://generic-test-provider.example/v1",
++			reasoning: true,
++			thinking: {
++				mode: "effort",
++				efforts: [Effort.Low, Effort.Medium, Effort.High, Effort.XHigh, Effort.Max],
++			},
++			input: ["text"],
++			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
++			contextWindow: 128_000,
++			maxTokens: 8192,
++		});
++		const primarySelector = `${primary.provider}/${primary.id}`;
++		const role = "subagent:jev-rollover";
++		const requested: Array<{ selector: string; thinking: unknown }> = [];
++		const fallbackEfforts: Array<{ selector: string; thinking: unknown }> = [];
++		const transientError = (model: Model): AssistantMessageEventStream => {
++			const stream = new AssistantMessageEventStream();
++			queueMicrotask(() => {
++				const error: AssistantMessage = {
++					role: "assistant",
++					content: [],
++					api: model.api,
++					provider: model.provider,
++					model: model.id,
++					usage: emptyUsage(),
++					stopReason: "error",
++					errorMessage: "429 rate limit exceeded",
++					errorStatus: 429,
++					errorId: AIError.create(AIError.Flag.Transient),
++					timestamp: Date.now(),
++				};
++				stream.push({ type: "error", reason: "error", error });
++			});
++			return stream;
++		};
++		const agent = new Agent({
++			getApiKey: model => `${model.provider}-test-key`,
++			initialState: {
++				model: primary,
++				systemPrompt: ["Test"],
++				tools: [],
++				messages: [],
++			},
++			streamFn: (model, context, options) => {
++				requested.push({ selector: `${model.provider}/${model.id}`, thinking: options?.reasoning });
++				if (
++					(model.provider === primary.provider && model.id === primary.id) ||
++					(model.provider === routedModel.provider && model.id === routedModel.id)
++				) {
++					return transientError(model);
++				}
++				if (model.provider === configuredModel.provider && model.id === configuredModel.id) {
++					return recoveredTextStream(model, "Recovered on configured model-key fallback");
++				}
++				throw new Error(`Unexpected model requested: ${model.provider}/${model.id}`);
++			},
++		});
++		modelRegistry.registerProvider(
++			"generic-test-provider",
++			{
++				api: "openai-completions",
++				apiKey: "generic-test-provider-key",
++				baseUrl: "https://generic-test-provider.example/v1",
++				models: [primary as never],
++			},
++			"test:jev-rollover",
++		);
++		try {
++			const settings = Settings.isolated({
++				"compaction.enabled": false,
++				"retry.baseDelayMs": 1,
++				"retry.fallbackChains": {
++					[role]: [
++						`${routedModel.provider}/${routedModel.id}:max`,
++						`${configuredModel.provider}/${configuredModel.id}:low`,
++					],
++					[primarySelector]: [`${configuredModel.provider}/${configuredModel.id}:low`],
++				},
++			});
++			settings.setModelRole(role, primarySelector);
++			const sessionManager = SessionManager.inMemory();
++			sessionManager.appendModelChange(primarySelector, role);
++			session = new AgentSession({
++				agent,
++				sessionManager,
++				settings,
++				modelRegistry,
++				thinkingLevel: Effort.Low,
++			});
++			session.subscribe(event => {
++				if (event.type === "retry_fallback_applied") {
++					fallbackEfforts.push({ selector: event.to, thinking: session?.thinkingLevel });
++				}
++			});
++
++			await session.prompt("Recover through the routed chain");
++			await session.waitForIdle();
++
++			expect(requested.map(item => item.selector)).toEqual([
++				primarySelector,
++				`${routedModel.provider}/${routedModel.id}`,
++				`${configuredModel.provider}/${configuredModel.id}`,
++			]);
++			expect(fallbackEfforts).toEqual([
++				{ selector: `${routedModel.provider}/${routedModel.id}:max`, thinking: Effort.Max },
++				{ selector: `${configuredModel.provider}/${configuredModel.id}:low`, thinking: Effort.Low },
++			]);
++			expect(session.model?.provider).toBe(configuredModel.provider);
++			expect(session.model?.id).toBe(configuredModel.id);
++		} finally {
++			modelRegistry.unregisterProvider("generic-test-provider");
++		}
++	});
+ 
+ 	it("clamps a fallback selector's explicit thinking level to the session effort ceiling", async () => {
+ 		const primaryModel = getBundledModel("anthropic", "claude-sonnet-4-5");
+diff --git a/packages/coding-agent/test/extensions-runner.test.ts b/packages/coding-agent/test/extensions-runner.test.ts
+index c6c6c80bf..0209a9ff6 100644
+--- a/packages/coding-agent/test/extensions-runner.test.ts
++++ b/packages/coding-agent/test/extensions-runner.test.ts
+@@ -10,6 +10,7 @@ import type { AgentMessage, AgentTool, AgentToolContext } from "@oh-my-pi/pi-age
+ import { streamAnthropic } from "@oh-my-pi/pi-ai/providers/anthropic";
+ import type { MessageCreateParams } from "@oh-my-pi/pi-ai/providers/anthropic-wire";
+ import type { ImageContent, TextContent } from "@oh-my-pi/pi-ai";
++import { ThinkingLevel } from "@oh-my-pi/pi-agent-core/thinking";
+ import { kCursorExecResolved } from "@oh-my-pi/pi-ai/utils/block-symbols";
+ import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
+ import { convertToLlm, wrapSteeringForModel } from "@oh-my-pi/pi-coding-agent/session/messages";
+@@ -95,6 +96,104 @@ describe("ExtensionRunner", () => {
+ 			errors: result.errors.filter(error => isTestScoped(error.path)),
+ 		};
+ 	};
++	it("dispatches before_subagent_spawn with routing metadata and a cancellable signal", async () => {
++		const eventPath = path.join(tempDir.path(), "before-subagent.json");
++		fs.writeFileSync(
++			path.join(extensionsDir, "routing.ts"),
++			`
++				import { ThinkingLevel } from "@oh-my-pi/pi-agent-core/thinking";
++				import fs from "node:fs";
++				export default function(pi) {
++					pi.on("before_subagent_spawn", async (event) => {
++						fs.writeFileSync(${JSON.stringify(eventPath)}, JSON.stringify({
++							type: event.type,
++							invocationKind: event.invocationKind,
++							assignment: event.assignment,
++							context: event.context,
++							agent: event.agent,
++							modelLocked: event.modelLocked,
++							effortLocked: event.effortLocked,
++							hasSignal: event.signal instanceof AbortSignal,
++							signalAborted: event.signal?.aborted,
++						}));
++						return { model: "anthropic/claude-sonnet-4-5", thinkingLevel: ThinkingLevel.High };
++					});
++				}
++			`,
++		);
++		const result = await loadTestExtensions();
++		const runner = new ExtensionRunner(
++			result.extensions,
++			result.runtime,
++			tempDir.path(),
++			sessionManager,
++			modelRegistry,
++		);
++		const signal = new AbortController();
++		const decision = await runner.emitBeforeSubagentSpawn(
++			{
++				type: "before_subagent_spawn",
++				invocationKind: "task",
++				assignment: "route this worker",
++				context: "ordinary context",
++				agent: "worker",
++				model: ["anthropic/claude-sonnet-4-5"],
++				thinkingLevel: ThinkingLevel.Medium,
++				modelLocked: false,
++				effortLocked: false,
++				modelRole: "task",
++				patterns: ["anthropic/claude-sonnet-4-5"],
++			},
++			signal.signal,
++		);
++		expect(decision).toMatchObject({ model: "anthropic/claude-sonnet-4-5", thinkingLevel: ThinkingLevel.High });
++		expect(JSON.parse(fs.readFileSync(eventPath, "utf8"))).toEqual({
++			type: "before_subagent_spawn",
++			invocationKind: "task",
++			assignment: "route this worker",
++			context: "ordinary context",
++			agent: "worker",
++			modelLocked: false,
++			effortLocked: false,
++			hasSignal: true,
++			signalAborted: false,
++		});
++		signal.abort();
++	});
++	it("blocks dispatch when a before_subagent_spawn handler throws", async () => {
++		fs.writeFileSync(
++			path.join(extensionsDir, "routing-error.ts"),
++			`
++				export default function(pi) {
++					pi.on("before_subagent_spawn", async () => {
++						throw new Error("routing failed");
++					});
++				}
++			`,
++		);
++		const result = await loadTestExtensions();
++		const runner = new ExtensionRunner(
++			result.extensions,
++			result.runtime,
++			tempDir.path(),
++			sessionManager,
++			modelRegistry,
++		);
++
++		const decision = await runner.emitBeforeSubagentSpawn({
++			type: "before_subagent_spawn",
++			invocationKind: "task",
++			assignment: "route this worker",
++			agent: "worker",
++			model: ["anthropic/claude-sonnet-4-5"],
++			modelLocked: false,
++			effortLocked: false,
++			modelRole: "task",
++			patterns: ["anthropic/claude-sonnet-4-5"],
++		});
++
++		expect(decision).toMatchObject({ block: true, reason: "before_subagent_spawn handler error: routing failed" });
++	});
+ 
+ 	it("reflects SessionManager.moveTo() changes instead of the constructor-time snapshot (/move)", async () => {
+ 		const dirA = tempDir.join("dirA");
+diff --git a/packages/coding-agent/test/issue-2750-subagent-runtime-fallback.test.ts b/packages/coding-agent/test/issue-2750-subagent-runtime-fallback.test.ts
+index 05b0c9b0f..45c4cddcc 100644
+--- a/packages/coding-agent/test/issue-2750-subagent-runtime-fallback.test.ts
++++ b/packages/coding-agent/test/issue-2750-subagent-runtime-fallback.test.ts
+@@ -222,6 +222,7 @@ describe("subagent runtime model resolution", () => {
+ 	it("passes ordered subagent candidates as a child retry fallback chain", async () => {
+ 		const primary = model("primary", "bad-runtime-model");
+ 		const fallback = model("fallback", "working-model");
++		const configured = model("configured", "last-model");
+ 		let childFallbackChains: Record<string, string[]> | undefined;
+ 		vi.spyOn(sdkModule, "createAgentSession").mockImplementation(async options => {
+ 			if (!options) throw new Error("Expected createAgentSession options");
+@@ -235,6 +236,7 @@ describe("subagent runtime model resolution", () => {
+ 		const settings = Settings.isolated({
+ 			"retry.fallbackChains": {
+ 				default: ["global/inherited-model"],
++				"primary/bad-runtime-model": ["configured/last-model"],
+ 			},
+ 		});
+ 		settings.setModelRole("default", "primary/bad-runtime-model");
+@@ -248,7 +250,7 @@ describe("subagent runtime model resolution", () => {
+ 			settings,
+ 			modelRegistry: {
+ 				refresh: async () => {},
+-				getAvailable: () => [primary, fallback],
++				getAvailable: () => [primary, fallback, configured],
+ 				getApiKey: async () => "test-key",
+ 			} as never,
+ 			enableLsp: false,
+@@ -270,7 +272,7 @@ describe("subagent runtime model resolution", () => {
+ 			}
+ 		}
+ 		expect(firstFallbackRole).toBe("subagent:issue-2750");
+-		expect(subagentFallbackChain).toEqual(["fallback/working-model"]);
++		expect(subagentFallbackChain).toEqual(["fallback/working-model", "configured/last-model"]);
+ 		expect(inheritedFallbackChain).toEqual(["global/inherited-model"]);
+ 		expect(result.modelOverride).toEqual(["primary/bad-runtime-model", "fallback/working-model"]);
+ 		expect(result.resolvedModel).toBe("fallback/working-model");
+diff --git a/packages/coding-agent/test/task/structured-subagent.test.ts b/packages/coding-agent/test/task/structured-subagent.test.ts
+index 2ff6a01ce..2b45401db 100644
+--- a/packages/coding-agent/test/task/structured-subagent.test.ts
++++ b/packages/coding-agent/test/task/structured-subagent.test.ts
+@@ -1,10 +1,12 @@
+-import { afterEach, describe, expect, it, vi } from "bun:test";
++import { afterEach, describe, expect, it, type Mock, vi } from "bun:test";
+ import * as fs from "node:fs/promises";
+ import * as os from "node:os";
+ import path from "node:path";
+ import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
+ import type { AgentCompactionThresholdOverride } from "@oh-my-pi/pi-coding-agent/config/compaction-threshold";
+ import type { BeforeSubagentSpawnEvent } from "@oh-my-pi/pi-coding-agent/extensibility/extensions/types";
++import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
++import { ThinkingLevel } from "@oh-my-pi/pi-agent-core/thinking";
+ import {
+ 	artifactsDirsFromRegistry,
+ 	resetRegisteredArtifactDirsForTests,
+@@ -114,6 +116,21 @@ afterEach(() => {
+ 	vi.restoreAllMocks();
+ 	resetRegisteredArtifactDirsForTests();
+ });
++function routingSession(decision: unknown): {
++	session: ToolSession;
++	emit: Mock<(event: BeforeSubagentSpawnEvent, signal?: AbortSignal) => Promise<unknown>>;
++} {
++	const base = session();
++	const primary = getBundledModel("anthropic", "claude-sonnet-4-5");
++	const alternate = getBundledModel("openai", "gpt-4o-mini");
++	if (!primary || !alternate) throw new Error("Expected bundled routing test models");
++	base.modelRegistry = { getAvailable: () => [primary, alternate] } as ToolSession["modelRegistry"];
++	const emit: Mock<(event: BeforeSubagentSpawnEvent, signal?: AbortSignal) => Promise<unknown>> = vi.fn(
++		async (_event: BeforeSubagentSpawnEvent, _signal?: AbortSignal) => decision,
++	);
++	base.emitBeforeSubagentSpawn = emit as ToolSession["emitBeforeSubagentSpawn"];
++	return { session: base, emit };
++}
+ 
+ describe("structured subagent primitive", () => {
+ 	it("resolves user-tagged model agents for task and eval but rejects untagged names", async () => {
+@@ -476,6 +493,11 @@ describe("structured subagent primitive", () => {
+ 				type: "before_subagent_spawn",
+ 				agent: "worker",
+ 				invocationKind: "task",
++				assignment: "Inspect the target.",
++				model: ["anthropic/claude-opus-4-5"],
++				thinkingLevel: undefined,
++				modelLocked: false,
++				effortLocked: false,
+ 				modelRole: "definition",
+ 				patterns: ["anthropic/claude-opus-4-5"],
+ 			},
+@@ -955,4 +977,118 @@ describe("structured subagent primitive", () => {
+ 		expect(await fs.stat(artifactsDir ?? "")).toBeDefined();
+ 		await fs.rm(settled.artifactsDir, { recursive: true, force: true });
+ 	});
++	it("applies an unlocked model and thinking route exactly once before dispatch", async () => {
++		mockDiscovery();
++		const alternate = getBundledModel("openai", "gpt-4o-mini");
++		if (!alternate) throw new Error("Expected bundled alternate routing model");
++		const route = routingSession({
++			model: `${alternate.provider}/${alternate.id}`,
++			thinkingLevel: ThinkingLevel.Off,
++		});
++		const dispatched: executorModule.ExecutorOptions[] = [];
++		vi.spyOn(executorModule, "runSubprocess").mockImplementation(async options => {
++			dispatched.push(options);
++			return result();
++		});
++
++		await runStructuredSubagent(request({ session: route.session, routing: "auto", retainArtifacts: true }));
++
++		expect(route.emit).toHaveBeenCalledTimes(1);
++		expect(dispatched[0]?.modelOverride).toEqual([`${alternate.provider}/${alternate.id}`]);
++	});
++	it("canonicalizes an effort-only route against a model selector with an inherited suffix", async () => {
++		const baselineModel = "openai/gpt-4o-mini:high";
++		mockDiscovery({ ...AGENT, model: [baselineModel] });
++		const route = routingSession({ thinkingLevel: ThinkingLevel.Off });
++		const dispatched: executorModule.ExecutorOptions[] = [];
++		vi.spyOn(executorModule, "runSubprocess").mockImplementation(async options => {
++			dispatched.push(options);
++			return result();
++		});
++
++		await runStructuredSubagent(request({ session: route.session, routing: "auto", retainArtifacts: true }));
++
++		expect(route.emit).toHaveBeenCalledTimes(1);
++		expect(dispatched[0]?.modelOverride).toEqual(["openai/gpt-4o-mini"]);
++		expect(dispatched[0]?.modelOverride).not.toContain(":high");
++		expect(dispatched[0]?.modelRole).toBeUndefined();
++		expect(dispatched[0]?.thinkingLevel).toBe(ThinkingLevel.Off);
++	});
++	it("keeps routed backups after an effort-only hook pin", async () => {
++		mockDiscovery();
++		const primary = getBundledModel("anthropic", "claude-sonnet-4-5");
++		const backup = getBundledModel("openai", "gpt-4o-mini");
++		if (!primary || !backup) throw new Error("Expected bundled routing test models");
++		const route = routingSession({
++			model: [`${primary.provider}/${primary.id}`, `${backup.provider}/${backup.id}`],
++			thinkingLevel: ThinkingLevel.Off,
++		});
++		const dispatched: executorModule.ExecutorOptions[] = [];
++		vi.spyOn(executorModule, "runSubprocess").mockImplementation(async options => {
++			dispatched.push(options);
++			return result();
++		});
++
++		await runStructuredSubagent(request({ session: route.session, routing: "auto", retainArtifacts: true }));
++
++		expect(route.emit).toHaveBeenCalledTimes(1);
++		expect(dispatched[0]?.modelOverride).toEqual([
++			`${primary.provider}/${primary.id}`,
++			`${backup.provider}/${backup.id}`,
++		]);
++		expect(dispatched[0]?.thinkingLevel).toBe(ThinkingLevel.Off);
++	});
++
++	it("skips routing when opted out and preserves explicit model locks", async () => {
++		mockDiscovery();
++		const alternate = getBundledModel("openai", "gpt-4o-mini");
++		if (!alternate) throw new Error("Expected bundled alternate routing model");
++		const decision = { model: `${alternate.provider}/${alternate.id}`, thinkingLevel: ThinkingLevel.Off };
++		const off = routingSession(decision);
++		const locked = routingSession(decision);
++		const dispatched: executorModule.ExecutorOptions[] = [];
++		vi.spyOn(executorModule, "runSubprocess").mockImplementation(async options => {
++			dispatched.push(options);
++			return result();
++		});
++		const baseline = await resolveEffectiveSubagentPolicy(request({ session: off.session, routing: "off" }));
++
++		await runStructuredSubagent(request({ session: off.session, routing: "off", retainArtifacts: true }));
++		await runStructuredSubagent(
++			request({
++				session: locked.session,
++				model: "anthropic/claude-sonnet-4-5",
++				routing: "auto",
++				retainArtifacts: true,
++			}),
++		);
++
++		expect(off.emit).not.toHaveBeenCalled();
++		expect(locked.emit).toHaveBeenCalledTimes(1);
++		expect(locked.emit.mock.calls[0]?.[0].effortLocked).toBe(true);
++		expect(locked.emit.mock.calls[0]?.[0].modelLocked).toBe(true);
++		expect(dispatched[0]?.modelOverride).toEqual(baseline.modelOverride);
++		expect(dispatched[1]?.modelOverride).toEqual(["anthropic/claude-sonnet-4-5"]);
++	});
++
++	it.each([
++		["unsupported model", { model: "not-a-real-provider/not-a-real-model" }],
++		[
++			"invalid thinking level",
++			{
++				model: "openai/gpt-4o-mini",
++				thinkingLevel: "not-a-thinking-level" as unknown as ThinkingLevel,
++			},
++		],
++		["blocked spawn", { block: true, reason: "policy denied" }],
++	] as const)("fails closed for %s without spawning", async (_label, decision) => {
++		mockDiscovery();
++		const route = routingSession(decision);
++		const dispatch = vi.spyOn(executorModule, "runSubprocess").mockImplementation(async () => result());
++
++		await expect(runStructuredSubagent(request({ session: route.session, retainArtifacts: true }))).rejects.toThrow();
++
++		expect(route.emit).toHaveBeenCalledTimes(1);
++		expect(dispatch).not.toHaveBeenCalled();
++	});
+ });
+diff --git a/packages/coding-agent/test/task/wire-schema.test.ts b/packages/coding-agent/test/task/wire-schema.test.ts
+index b1a093e32..89f9810be 100644
+--- a/packages/coding-agent/test/task/wire-schema.test.ts
++++ b/packages/coding-agent/test/task/wire-schema.test.ts
+@@ -116,6 +116,41 @@ describe("task wire schema", () => {
+ 		expect("role" in item).toBe(false);
+ 		expect(item.task).toBe("x");
+ 	});
++	it.each([
++		["flat without isolation", false, false],
++		["flat with isolation", true, false],
++		["batch without isolation", false, true],
++		["batch with isolation", true, true],
++	] as const)("retains routing:'off' for %s", (_label, isolationEnabled, batchEnabled) => {
++		const schema = getTaskSchema({
++			isolationEnabled,
++			batchEnabled,
++			effortEnabled: true,
++			evalToolsEnabled: false,
++			defaultAgent: "scout",
++		});
++		const input = batchEnabled
++			? { context: "shared context", tasks: [{ task: "inspect", solutionSpace: "c", routing: "off" as const }] }
++			: {
++					agent: "scout",
++					task: "inspect",
++					solutionSpace: "c",
++					routing: "off" as const,
++					...(isolationEnabled ? { isolated: true } : {}),
++				};
++		const parsed = schema(input);
++		expect(parsed instanceof type.errors).toBe(false);
++		if (parsed instanceof type.errors) return;
++		if (batchEnabled) {
++			const items = parsedItems(parsed);
++			expect(items[0]?.routing).toBe("off");
++			expect(items[0]?.agent).toBe("scout");
++		} else {
++			const record = parsed as Record<string, unknown>;
++			expect(record.routing).toBe("off");
++			expect(record.agent).toBe("scout");
++		}
++	});
+ });
+ 
+ // Contract: `agent` and `name` shape the spawned subagent's identity and the
+diff --git a/packages/coding-agent/test/task/workpool.test.ts b/packages/coding-agent/test/task/workpool.test.ts
+index ab91ad7c9..87b6149a8 100644
+--- a/packages/coding-agent/test/task/workpool.test.ts
++++ b/packages/coding-agent/test/task/workpool.test.ts
+@@ -378,7 +378,7 @@ describe("WorkPool dispatch", () => {
+ 			return execution(id);
+ 		});
+ 		const followSpy = vi.spyOn(executor, "runSubagentFollowUpTurn");
+-		const workpool = pool(session, "fresh");
++		const workpool = new WorkPool(session, { name: "fresh", policy: POLICY, routing: "off" });
+ 		workpool.push(["one", "two"]);
+ 		await until(() => gates.length === 1);
+ 		gates[0]?.resolve();
+@@ -387,6 +387,7 @@ describe("WorkPool dispatch", () => {
+ 		await finishPool(session, workpool);
+ 
+ 		expect(runSpy).toHaveBeenCalledTimes(2);
++		expect(runSpy.mock.calls.map(([request]) => request.routing)).toEqual(["off", "off"]);
+ 		expect(followSpy).not.toHaveBeenCalled();
+ 		expect(workpool.batches.map(batch => batch.agentId)).toEqual(["fresh-1", "fresh-2"]);
+ 		expect(workpool.batches.every(batch => batch.items.length === 1)).toBe(true);
+diff --git a/packages/tui/src/tools/task.ts b/packages/tui/src/tools/task.ts
+index a5b0d9faf..10de56f8e 100644
+--- a/packages/tui/src/tools/task.ts
++++ b/packages/tui/src/tools/task.ts
+@@ -2151,6 +2151,8 @@ export interface TaskItem {
+ 	solutionSpace?: string;
+ 	/** Per-spawn thinking effort: lowest/middle/highest level the resolved model supports. Overrides the agent's default selector (e.g. `auto`). */
+ 	effort?: "lo" | "med" | "hi";
++	/** Extension model routing mode for this worker. */
++	routing?: "auto" | "off";
+ 	/** Caller-provided output schema; its presence overrides the selected agent's schema. */
+ 	outputSchema?: unknown;
+ 	/** Validation behavior for a caller-provided or inherited output schema. */
+@@ -2178,6 +2180,8 @@ export interface TaskParams {
+ 	solutionSpace?: string;
+ 	/** Per-spawn thinking effort (flat form): lowest/middle/highest level the resolved model supports. */
+ 	effort?: "lo" | "med" | "hi";
++	/** Extension model routing mode for this worker. */
++	routing?: "auto" | "off";
+ 	/** Caller-provided output schema; its presence overrides the selected agent's schema. */
+ 	outputSchema?: unknown;
+ 	/** Validation behavior for a caller-provided or inherited output schema. */

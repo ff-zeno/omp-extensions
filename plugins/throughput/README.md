@@ -1,25 +1,29 @@
 # throughput
 
-Header widget: sparkline, TPS, TTFB, active and streaming counts, and worker rows.
+`throughput` adds an above-editor widget with a header sparkline, TPS, TTFB, active and streaming counts, aggregate tokens, and worker tree rows.
 
-session-mode is optional.
-This plugin never imports it.
+The worker tree preserves parent-child branches, orders active workers before completed workers, and shows at most eight rows before an overflow count.
 
-If session-mode is loaded, the header chip calls `paint()` on `Symbol.for("omp.session-mode.v1")` and follows Alt+O.
-If that symbol is missing, the chip is dim `normal` and nothing else changes.
-TPS and worker rows do not read that symbol.
-OMP 18.2.4+ added a native `composer.tokenRate` working-row readout.
-This panel supersedes it: single-session tok/s plus multi-worker aggregate,
-sparkline, TTFB, and per-worker gauges in one place.
-Keep native off to avoid duplicate readouts:
+Each worker row includes a status icon, worker name, persona chip, agent, model and thinking level, gauge, TPS, and token total.
 
-```
+The name, agent, and model columns resize with the terminal and truncate styled output without exceeding the available width.
+
+Agent names containing the `-frontier-` infix are compacted to `-` so reviewer seat numbers remain visible in the agent column.
+
+The persona chip reads `getMode` or `mode` and the header chip reads `paint` from `Symbol.for("omp.session-persona.v1")` when the session-persona plugin is loaded.
+
+Without that registry, the widget uses the session's queued persona where available and a dim `normal` chip otherwise.
+
+TPS uses streamed character estimates reconciled with billed output usage when available.
+
+OMP 18.2.4 and later expose a native `composer.tokenRate` readout, but this widget combines single-session throughput with multi-worker state, sparkline, TTFB, and per-worker gauges.
+
+Disable the native meter to avoid duplicate readouts:
+
+```yaml
 composer:
   shape: claude
   tokenRate: false
 ```
 
-The native meter is not exposed to extensions,
-so the panel keeps its own estimate (chars/3.5 reconciled with billed usage).
-
-Restart the session after install.
+Restart the session after installation.

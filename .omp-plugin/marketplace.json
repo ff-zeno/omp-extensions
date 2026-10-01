@@ -4,19 +4,25 @@
     "name": "Zeno"
   },
   "metadata": {
-    "description": "Throughput widget and session-mode cycle for Oh My Pi"
+    "description": "Throughput panel, session personas, and Jev subagent routing for Oh My Pi"
   },
   "plugins": [
     {
       "name": "throughput",
-      "description": "TPS sparkline, worker rows, optional session-mode header chip",
+      "description": "TPS sparkline, worker tree rows, session-persona header chip",
       "source": "./plugins/throughput",
       "license": "MIT"
     },
     {
-      "name": "session-mode",
-      "description": "Alt+O / /orch cycle: normal, orchestrate, brute",
-      "source": "./plugins/session-mode",
+      "name": "session-persona",
+      "description": "Alt+O / /orch persona cycle (normal, orchestrate, brute) for the session and its subagents",
+      "source": "./plugins/session-persona",
+      "license": "MIT"
+    },
+    {
+      "name": "intelligent-auto-agents",
+      "description": "Jev routing: picks each subagent's model slot and effort by job and difficulty. Requires the bundled OMP core patch",
+      "source": "./plugins/intelligent-auto-agents",
       "license": "MIT"
     }
   ]

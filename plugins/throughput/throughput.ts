@@ -12,13 +12,21 @@ interface StreamCall {
 	tokens: number;
 }
 
-interface SessionThroughput {
+export interface SessionThroughput {
 	readonly sessionId: string;
+	readonly agentId: string;
 	role: SessionRole;
 	readonly order: number;
 	label: string;
 	model: string;
 	thinkingLevel: string;
+	agentParentId?: string;
+	parentId?: string;
+	parentResolved: boolean;
+	children: string[];
+	depth: number;
+	agent: string;
+	mode?: string;
 	phase: SessionPhase;
 	toolName?: string;
 	messageStartedAt: number;
@@ -40,15 +48,29 @@ interface SessionThroughput {
 	messageOpen: boolean;
 }
 
-interface ThroughputRegistry {
-	readonly version: 3;
+export interface PendingSpawn {
+	parentSessionId: string;
+	workerName: string;
+	mode?: string;
+	createdAt: number;
+}
+
+export interface ThroughputRegistry {
+	readonly version: 4;
 	nextOrder: number;
 	mainSessionId?: string;
 	readonly sessions: Map<string, SessionThroughput>;
+	readonly sessionByAgentId: Map<string, string>;
+	readonly pendingSpawns: Map<string, PendingSpawn[]>;
 }
 
-const REGISTRY_KEY = Symbol.for("omp.throughput.registry.v3");
-const SESSION_MODE_KEY = Symbol.for("omp.session-mode.v1");
+export interface ThroughputTreeRow {
+	session: SessionThroughput;
+	prefix: string;
+}
+
+const REGISTRY_KEY = Symbol.for("omp.throughput.registry.v4");
+const SESSION_PERSONA_KEY = Symbol.for("omp.session-persona.v1");
 const UI_INTERVAL_MS = 150;
 const LIVE_SAMPLE_MS = 1_000;
 const MIN_CALL_MS = 100;
@@ -57,6 +79,7 @@ const STALL_MS = 1_500;
 const CALL_HISTORY = 10;
 const COMPLETED_RETENTION_MS = 3_000;
 const STALE_SESSION_MS = 10 * 60_000;
+const PENDING_SPAWN_TTL_MS = 60_000;
 const SPARK_LENGTH = 10;
 const MAX_WORKER_ROWS = 8;
 const GAUGE_FLOOR = 40;
@@ -64,13 +87,24 @@ const SCALE_CAP = 250;
 const WORKER_GAUGE_WIDTH = 9;
 const TRACK = "·";
 const BLOCKS = ["▁", "▂", "▃", "▄", "▅", "▆", "▇", "█"];
+const MODE_HEADER = /(?:^|\n)\s*#?\s*(?:mode|persona):\s*(normal|orchestrate|brute)\b/i;
 const PARTIAL_BLOCKS = [" ", "▏", "▎", "▍", "▌", "▋", "▊", "▉"];
 const SPINNER = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 
 function isThroughputRegistry(value: unknown): value is ThroughputRegistry {
 	if (value === null || typeof value !== "object") return false;
-	if (!("version" in value) || value.version !== 3) return false;
+	if (!("version" in value) || value.version !== 4) return false;
+	if (!("nextOrder" in value) || typeof value.nextOrder !== "number") return false;
+	if (
+		"mainSessionId" in value &&
+		value.mainSessionId !== undefined &&
+		typeof value.mainSessionId !== "string"
+	) {
+		return false;
+	}
 	if (!("sessions" in value) || !(value.sessions instanceof Map)) return false;
+	if (!("sessionByAgentId" in value) || !(value.sessionByAgentId instanceof Map)) return false;
+	if (!("pendingSpawns" in value) || !(value.pendingSpawns instanceof Map)) return false;
 	return true;
 }
 
@@ -79,13 +113,280 @@ function getRegistry(): ThroughputRegistry {
 	const existing = g[REGISTRY_KEY];
 	if (isThroughputRegistry(existing)) return existing;
 	const created: ThroughputRegistry = {
-		version: 3,
+		version: 4,
 		nextOrder: 1,
 		sessions: new Map(),
+		sessionByAgentId: new Map(),
+		pendingSpawns: new Map(),
 	};
 	g[REGISTRY_KEY] = created;
 	return created;
 }
+export function pendingSpawnKey(parentSessionId: string, workerName: string): string {
+	return `${parentSessionId}:${workerName}`;
+}
+
+export function parseTaskSpawns(
+	input: unknown,
+	parentSessionId: string,
+	createdAt = Date.now(),
+	toolCallId?: string,
+): PendingSpawn[] {
+	if (input === null || typeof input !== "object") return [];
+	const asSpawn = (value: unknown, index: number): PendingSpawn | undefined => {
+		if (value === null || typeof value !== "object") return undefined;
+		const task = value as Record<string, unknown>;
+		let workerName = task.name;
+		if (typeof workerName !== "string" || workerName.length === 0) {
+			if (!toolCallId) return undefined;
+			workerName = `task-${toolCallId.slice(-8)}-${index + 1}`;
+			task.name = workerName;
+		}
+		const spawn: PendingSpawn = { parentSessionId, workerName, createdAt };
+		let contextMode: string | undefined;
+		for (const value of [task.task, task.context]) {
+			if (typeof value !== "string") continue;
+			const match = value.match(MODE_HEADER);
+			if (match) {
+				contextMode = match[1].toLowerCase();
+				break;
+			}
+		}
+		const tag = typeof task.name === "string"
+			? task.name.match(/\[(orch|orchestrate|brute|normal)\]/i)?.[1]?.toLowerCase()
+			: undefined;
+		const tagMode = tag === "orch" || tag === "orchestrate"
+			? "orchestrate"
+			: tag === "brute" || tag === "normal"
+				? tag
+				: undefined;
+		const requestedMode =
+			task.mode === "normal" || task.mode === "orchestrate" || task.mode === "brute"
+				? task.mode
+				: contextMode ?? tagMode ?? (task.agent === "orchestrator" ? "orchestrate" : undefined);
+		if (typeof requestedMode === "string") spawn.mode = requestedMode;
+		return spawn;
+	};
+	if ("tasks" in input && Array.isArray(input.tasks)) {
+		return input.tasks.map(asSpawn).filter((spawn): spawn is PendingSpawn => spawn !== undefined);
+	}
+	const spawn = asSpawn(input, 0);
+	return spawn ? [spawn] : [];
+}
+
+export function queuePendingSpawns(
+	registry: ThroughputRegistry,
+	spawns: readonly PendingSpawn[],
+	timestamp = Date.now(),
+): void {
+	expirePendingSpawns(registry, timestamp);
+	for (const spawn of spawns) {
+		const key = pendingSpawnKey(spawn.parentSessionId, spawn.workerName);
+		const queued = registry.pendingSpawns.get(key);
+		if (queued) queued.push(spawn);
+		else registry.pendingSpawns.set(key, [spawn]);
+	}
+}
+export function expirePendingSpawns(registry: ThroughputRegistry, timestamp = Date.now()): void {
+	for (const [key, queued] of registry.pendingSpawns) {
+		const retained = queued.filter((spawn) => timestamp - spawn.createdAt <= PENDING_SPAWN_TTL_MS);
+		if (retained.length === 0) registry.pendingSpawns.delete(key);
+		else if (retained.length !== queued.length) registry.pendingSpawns.set(key, retained);
+	}
+}
+
+export function clearPendingSpawns(registry: ThroughputRegistry, parentSessionId: string): void {
+	for (const [key, queued] of registry.pendingSpawns) {
+		if (queued.every((spawn) => spawn.parentSessionId === parentSessionId)) {
+			registry.pendingSpawns.delete(key);
+			continue;
+		}
+		const retained = queued.filter((spawn) => spawn.parentSessionId !== parentSessionId);
+		if (retained.length !== queued.length) registry.pendingSpawns.set(key, retained);
+	}
+}
+
+function wouldCreateCycle(registry: ThroughputRegistry, parentId: string, worker: SessionThroughput): boolean {
+	const pending = [worker.sessionId];
+	const visited = new Set<string>();
+	while (pending.length > 0) {
+		const currentId = pending.pop();
+		if (!currentId || visited.has(currentId)) continue;
+		if (currentId === parentId) return true;
+		visited.add(currentId);
+		for (const childId of registry.sessions.get(currentId)?.children ?? []) pending.push(childId);
+	}
+	const ancestors = new Set<string>();
+	let currentId: string | undefined = parentId;
+	while (currentId) {
+		if (currentId === worker.sessionId || ancestors.has(currentId)) return true;
+		ancestors.add(currentId);
+		currentId = registry.sessions.get(currentId)?.parentId;
+	}
+	return false;
+}
+
+function applyPendingSpawn(
+	registry: ThroughputRegistry,
+	worker: SessionThroughput,
+	parentSessionId: string,
+	timestamp = Date.now(),
+): void {
+	if (worker.role !== "worker") return;
+	expirePendingSpawns(registry, timestamp);
+	const separator = worker.label.indexOf(".");
+	const shortName = separator < 0 ? worker.label : worker.label.slice(separator + 1);
+	const workerNames = new Set([worker.label, shortName]);
+	for (const [key, queue] of registry.pendingSpawns) {
+		const index = queue.findIndex(
+			(spawn) => spawn.parentSessionId === parentSessionId && workerNames.has(spawn.workerName),
+		);
+		if (index < 0) continue;
+		const [spawn] = queue.splice(index, 1);
+		if (queue.length === 0) registry.pendingSpawns.delete(key);
+		if (spawn?.mode !== undefined) worker.mode = spawn.mode;
+		return;
+	}
+}
+
+
+export function collectWorkerTree(
+	mainSessionId: string | undefined,
+	sessions: Iterable<SessionThroughput>,
+): ThroughputTreeRow[] {
+	const nodes = [...sessions];
+	const byId = new Map<string, SessionThroughput>();
+	for (const session of nodes) byId.set(session.sessionId, session);
+	const children = new Map<string, SessionThroughput[]>();
+	for (const session of nodes) children.set(session.sessionId, []);
+	for (const session of nodes) {
+		if (session.parentId && byId.has(session.parentId)) {
+			children.get(session.parentId)?.push(session);
+		}
+	}
+	const compare = (left: SessionThroughput, right: SessionThroughput): number => {
+		if (left.phase === "complete" && right.phase !== "complete") return 1;
+		if (right.phase === "complete" && left.phase !== "complete") return -1;
+		return left.order - right.order;
+	};
+	for (const childrenOfParent of children.values()) childrenOfParent.sort(compare);
+	const result: ThroughputTreeRow[] = [];
+	const visited = new Set<string>();
+	const branchAncestors: boolean[] = [];
+	const visit = (session: SessionThroughput, hidden = false): void => {
+		if (visited.has(session.sessionId)) return;
+		visited.add(session.sessionId);
+		const hasParent = !!session.parentId && byId.has(session.parentId);
+		const siblings = hasParent ? (children.get(session.parentId ?? "") ?? []) : [];
+		const isLast = siblings.indexOf(session) === siblings.length - 1;
+		if (!hidden && session.role === "worker") {
+			let prefix = "";
+			if (hasParent) {
+				for (const ancestorIsLast of branchAncestors) prefix += ancestorIsLast ? "   " : "│  ";
+				prefix += isLast ? "└─ " : "├─ ";
+			}
+			result.push({ session, prefix });
+		}
+		const descendants = children.get(session.sessionId) ?? [];
+		const previousDepth = branchAncestors.length;
+		if (hasParent) branchAncestors.push(isLast);
+		for (const child of descendants) visit(child);
+		branchAncestors.length = previousDepth;
+	};
+	const main = mainSessionId ? byId.get(mainSessionId) : undefined;
+	if (main) visit(main, true);
+	const roots = nodes
+		.filter((session) => session.role === "worker" && (!session.parentId || !byId.has(session.parentId)))
+		.sort(compare);
+	for (const root of roots) visit(root);
+	for (const session of nodes.sort(compare)) visit(session);
+	return result;
+}
+
+export function pruneWorkers(registry: ThroughputRegistry, timestamp: number): void {
+	expirePendingSpawns(registry, timestamp);
+	const childrenByParent = new Map<string, Set<string>>();
+	const hasPath = (fromId: string, targetId: string): boolean => {
+		const pending = [fromId];
+		const visited = new Set<string>();
+		while (pending.length > 0) {
+			const current = pending.pop();
+			if (!current || visited.has(current)) continue;
+			if (current === targetId) return true;
+			visited.add(current);
+			for (const childId of childrenByParent.get(current) ?? []) pending.push(childId);
+		}
+		return false;
+	};
+	const addChild = (parentId: string, childId: string): void => {
+		if (parentId === childId || hasPath(childId, parentId)) return;
+		let children = childrenByParent.get(parentId);
+		if (!children) {
+			children = new Set();
+			childrenByParent.set(parentId, children);
+		}
+		children.add(childId);
+	};
+	for (const session of registry.sessions.values()) {
+		if (session.parentId && registry.sessions.has(session.parentId)) addChild(session.parentId, session.sessionId);
+		for (const childId of session.children) {
+			if (registry.sessions.has(childId)) addChild(session.sessionId, childId);
+		}
+	}
+	const workers = [...registry.sessions.values()]
+		.filter((session) => session.role === "worker")
+		.sort((left, right) => right.depth - left.depth || right.order - left.order);
+	const retained = new Map<string, boolean>();
+	const retainWorker = (worker: SessionThroughput, visiting = new Set<string>()): boolean => {
+		const cached = retained.get(worker.sessionId);
+		if (cached !== undefined) return cached;
+		if (visiting.has(worker.sessionId)) return false;
+		const completedExpired =
+			worker.phase === "complete" &&
+			worker.completedAt !== undefined &&
+			timestamp - worker.completedAt > COMPLETED_RETENTION_MS;
+		const stale = timestamp - worker.updatedAt > STALE_SESSION_MS;
+		if (!completedExpired && !stale) {
+			retained.set(worker.sessionId, true);
+			return true;
+		}
+		visiting.add(worker.sessionId);
+		for (const childId of childrenByParent.get(worker.sessionId) ?? []) {
+			const child = registry.sessions.get(childId);
+			if (child?.role === "worker" && retainWorker(child, visiting)) {
+				visiting.delete(worker.sessionId);
+				retained.set(worker.sessionId, true);
+				return true;
+			}
+		}
+		visiting.delete(worker.sessionId);
+		retained.set(worker.sessionId, false);
+		return false;
+	};
+	for (const worker of workers) {
+		if (retainWorker(worker)) continue;
+		registry.sessions.delete(worker.sessionId);
+		if (registry.sessionByAgentId.get(worker.agentId) === worker.sessionId) {
+			registry.sessionByAgentId.delete(worker.agentId);
+		}
+		for (const parent of registry.sessions.values()) {
+			parent.children = parent.children.filter((childId) => childId !== worker.sessionId);
+		}
+		if (worker.parentId) {
+			const siblings = childrenByParent.get(worker.parentId);
+			siblings?.delete(worker.sessionId);
+			if (siblings?.size === 0) childrenByParent.delete(worker.parentId);
+		}
+	}
+}
+
+export function personaBadge(mode: string | undefined): { label: string; icon: string; tone: "dim" | "accent" | "warning" } {
+	if (mode === "orchestrate") return { label: "🧠 orch", icon: "🧠", tone: "accent" };
+	if (mode === "brute") return { label: "🚀 brute", icon: "🚀", tone: "warning" };
+	return { label: "🔘 normal", icon: "🔘", tone: "dim" };
+}
+
+
 
 export function estimateTokens(chars: number): number {
 	return Math.ceil(chars / 3.5);
@@ -281,6 +582,95 @@ function truncate(value: string, width: number): string {
 	return `${value.slice(0, width - 1)}…`;
 }
 
+function terminalCharWidth(character: string): number {
+	const codePoint = character.codePointAt(0) ?? 0;
+	if (
+		codePoint === 0x200d ||
+		/^\p{Mark}$/u.test(character) ||
+		(codePoint >= 0xfe00 && codePoint <= 0xfe0f) ||
+		(codePoint >= 0xe0100 && codePoint <= 0xe01ef)
+	) {
+		return 0;
+	}
+	if (
+		codePoint >= 0x1100 &&
+		(codePoint <= 0x115f ||
+			codePoint === 0x2329 ||
+			codePoint === 0x232a ||
+			(codePoint >= 0x2e80 && codePoint <= 0xa4cf && codePoint !== 0x303f) ||
+			(codePoint >= 0xac00 && codePoint <= 0xd7a3) ||
+			(codePoint >= 0xf900 && codePoint <= 0xfaff) ||
+			(codePoint >= 0xfe10 && codePoint <= 0xfe19) ||
+			(codePoint >= 0xfe30 && codePoint <= 0xfe6f) ||
+			(codePoint >= 0xff00 && codePoint <= 0xff60) ||
+			(codePoint >= 0xffe0 && codePoint <= 0xffe6) ||
+			(codePoint >= 0x1f300 && codePoint <= 0x1faff) ||
+			(codePoint >= 0x20000 && codePoint <= 0x3fffd))
+	) {
+		return 2;
+	}
+	return 1;
+}
+
+function ansiSequenceEnd(value: string, start: number): number {
+	if (value.charCodeAt(start) !== 0x1b || value.charCodeAt(start + 1) !== 0x5b) return start;
+	let index = start + 2;
+	while (index < value.length) {
+		const code = value.charCodeAt(index);
+		if (code >= 0x40 && code <= 0x7e) return index + 1;
+		index++;
+	}
+	return start;
+}
+
+export function terminalDisplayWidth(value: string): number {
+	let columns = 0;
+	for (let index = 0; index < value.length; ) {
+		if (value.charCodeAt(index) === 0x1b) {
+			const end = ansiSequenceEnd(value, index);
+			if (end > index) {
+				index = end;
+				continue;
+			}
+		}
+		const character = String.fromCodePoint(value.codePointAt(index) ?? 0);
+		columns += terminalCharWidth(character);
+		index += character.length;
+	}
+	return columns;
+}
+
+export function truncateTerminalLine(value: string, width: number): string {
+	if (width <= 0) return "";
+	let result = "";
+	let columns = 0;
+	let index = 0;
+	let hasAnsi = false;
+	let clipped = false;
+	while (index < value.length) {
+		if (value.charCodeAt(index) === 0x1b) {
+			const end = ansiSequenceEnd(value, index);
+			if (end > index) {
+				result += value.slice(index, end);
+				index = end;
+				hasAnsi = true;
+				continue;
+			}
+		}
+		const character = String.fromCodePoint(value.codePointAt(index) ?? 0);
+		const charWidth = terminalCharWidth(character);
+		if (columns + charWidth > width) {
+			clipped = true;
+			break;
+		}
+		result += character;
+		columns += charWidth;
+		index += character.length;
+	}
+	if (clipped && hasAnsi) result += "\x1b[0m";
+	return result;
+}
+
 function pad(value: string, width: number): string {
 	return truncate(value, width).padEnd(width);
 }
@@ -455,21 +845,36 @@ function agentBadgeColor(theme: Theme, agent: string, text: string): string {
 	}
 }
 
-function renderAgentBadge(theme: Theme, agent: string | undefined): string {
-	const raw = agent && agent.length > 0 ? agent : "task";
-	return agentBadgeColor(theme, raw, pad(raw, 8));
+function renderModeBadge(theme: Theme, session: SessionThroughput): string {
+	const modeRegistry = (globalThis as Record<symbol, unknown>)[SESSION_PERSONA_KEY] as
+		| { getMode?: (sessionId: string) => string; mode?: Map<string, string> }
+		| undefined;
+	const mode = modeRegistry
+		? modeRegistry.mode?.has(session.sessionId)
+			? modeRegistry.getMode?.(session.sessionId)
+			: session.mode ?? "normal"
+		: session.mode;
+	const badge = personaBadge(mode);
+	return theme.fg(badge.tone, badge.icon);
 }
 
-function emptySession(sessionId: string, role: SessionRole, order: number, ctx: ExtensionContext, pi: ExtensionAPI): SessionThroughput {
+
+function emptySession(sessionId: string, order: number, ctx: ExtensionContext, pi: ExtensionAPI): SessionThroughput {
 	const timestamp = Date.now();
 	return {
 		sessionId,
-		role,
+		agentId: ctx.agent.id,
+		agentParentId: ctx.agent.parentId,
+		role: ctx.agent.kind === "main" ? "main" : "worker",
 		order,
 		label: sessionLabel(ctx),
 		model: modelLabel(ctx),
 		thinkingLevel: String(pi.getThinkingLevel()),
+		agent: ctx.agent.name,
 		phase: "waiting",
+		children: [],
+		parentResolved: ctx.agent.parentId === undefined,
+		depth: ctx.agent.depth,
 		messageStartedAt: 0,
 		requestStartedAt: 0,
 		firstTokenAt: 0,
@@ -494,18 +899,46 @@ export default function throughput(pi: ExtensionAPI): void {
 	let state: SessionThroughput | undefined;
 	let uiTimer: NodeJS.Timeout | number | undefined;
 	let uiTick = 0;
-	const nameToAgent = new Map<string, string>();
 	let cachedCols = -1;
-	let cachedLabelWidth = 0;
+	let cachedLabelCap = 0;
+	let cachedAgentWidth = 0;
 	let cachedModelWidth = 0;
 
 	function removeCurrentState(): void {
 		if (!state) return;
-		registry.sessions.delete(state.sessionId);
-		if (registry.mainSessionId === state.sessionId) {
-			registry.mainSessionId = undefined;
+		if (state.parentId) {
+			const parent = registry.sessions.get(state.parentId);
+			if (parent) parent.children = parent.children.filter((childId) => childId !== state?.sessionId);
 		}
+		for (const childId of state.children) {
+			const child = registry.sessions.get(childId);
+			if (!child) continue;
+			child.parentId = undefined;
+			child.parentResolved = child.agentParentId === undefined;
+		}
+		registry.sessions.delete(state.sessionId);
+		if (registry.sessionByAgentId.get(state.agentId) === state.sessionId) {
+			registry.sessionByAgentId.delete(state.agentId);
+		}
+		if (registry.mainSessionId === state.sessionId) registry.mainSessionId = undefined;
 		state = undefined;
+	}
+
+	function resolveParent(current: SessionThroughput): void {
+		if (current.parentResolved) return;
+		const parentSessionId = current.agentParentId
+			? registry.sessionByAgentId.get(current.agentParentId)
+			: undefined;
+		const parent = parentSessionId ? registry.sessions.get(parentSessionId) : undefined;
+		if (!parent || wouldCreateCycle(registry, parent.sessionId, current)) return;
+		current.parentId = parent.sessionId;
+		current.parentResolved = true;
+		if (!parent.children.includes(current.sessionId)) parent.children.push(current.sessionId);
+		applyPendingSpawn(registry, current, parent.sessionId);
+	}
+
+	function resolvePendingParents(): void {
+		for (const candidate of registry.sessions.values()) resolveParent(candidate);
 	}
 
 	function ensureState(ctx: ExtensionContext): SessionThroughput {
@@ -514,74 +947,69 @@ export default function throughput(pi: ExtensionAPI): void {
 			state.label = sessionLabel(ctx);
 			state.model = modelLabel(ctx);
 			state.thinkingLevel = String(pi.getThinkingLevel());
+			state.agent = ctx.agent.name;
+			state.depth = ctx.agent.depth;
 			registry.sessions.set(sessionId, state);
+			registry.sessionByAgentId.set(ctx.agent.id, sessionId);
+			resolveParent(state);
 			return state;
 		}
 
 		removeCurrentState();
-		if (registry.mainSessionId === undefined || !registry.sessions.has(registry.mainSessionId)) {
-			registry.mainSessionId = sessionId;
-		}
-		state = emptySession(
-			sessionId,
-			registry.mainSessionId === sessionId ? "main" : "worker",
-			registry.nextOrder++,
-			ctx,
-			pi,
-		);
+		if (ctx.agent.kind === "main") registry.mainSessionId = sessionId;
+		state = emptySession(sessionId, registry.nextOrder++, ctx, pi);
 		registry.sessions.set(sessionId, state);
+		registry.sessionByAgentId.set(ctx.agent.id, sessionId);
+		resolveParent(state);
+		resolvePendingParents();
 		return state;
 	}
 
-	function pruneWorkers(timestamp: number): void {
-		for (const [sessionId, worker] of registry.sessions) {
-			if (worker.role !== "worker") continue;
-			const completedExpired =
-				worker.phase === "complete" &&
-				worker.completedAt !== undefined &&
-				timestamp - worker.completedAt > COMPLETED_RETENTION_MS;
-			const stale = timestamp - worker.updatedAt > STALE_SESSION_MS;
-			if (completedExpired || stale) registry.sessions.delete(sessionId);
-		}
-	}
 
 	function workerRow(
 		theme: Theme,
 		worker: SessionThroughput,
+		treePrefix: string,
+		displayLabel: string,
 		labelWidth: number,
+		agentWidth: number,
 		modelWidth: number,
 		scale: number,
 		timestamp: number,
+		cols: number,
 	): string {
 		refreshAvgTps(worker, timestamp);
 		const isComplete = worker.phase === "complete";
 		const icon = renderStatusIcon(theme, worker.phase, uiTick);
-		const label = pad(worker.label, labelWidth);
+		const prefix = treePrefix.length > labelWidth - 4 ? `…${treePrefix.slice(-3)}` : treePrefix;
+		const availableLabelWidth = Math.max(0, labelWidth - prefix.length);
+		const label = availableLabelWidth === 0 ? "" : pad(displayLabel, availableLabelWidth);
 		const styledLabel = isComplete ? theme.fg("dim", label) : theme.fg("accent", label);
+		const branch = theme.fg("dim", prefix);
 		const model = theme.fg("dim", pad(`${worker.model}:${worker.thinkingLevel}`, modelWidth));
-		const badge = renderAgentBadge(theme, nameToAgent.get(worker.label));
+		const persona = renderModeBadge(theme, worker);
+		const dimPipe = theme.fg("dim", "|");
+		// Drop the shared `-frontier` infix so reviewer seats keep their number in the narrow agent column.
+		const badge = agentBadgeColor(theme, worker.agent, pad(worker.agent.replace("-frontier-", "-"), agentWidth));
 		const totalTokens = formatTokens(worker.totalTokens + (worker.messageOpen ? worker.messageTokens : 0));
 		const dimSeparator = theme.fg("dim", "·");
 		const tps = worker.avgTps;
 		const gauge = renderGauge(theme, tps, scale, WORKER_GAUGE_WIDTH);
 		const rateStr = pad(`${formatRate(tps)} tps`, 9);
 		const styledRate = tps > 0 ? speedColor(theme, tps, rateStr) : theme.fg("dim", rateStr);
-		const since = theme.fg("dim", sinceLabel(worker, timestamp));
-		return `${icon} ${styledLabel}  ${badge}  ${model}  ${gauge}  ${styledRate}  ${dimSeparator}  ${theme.fg("dim", totalTokens)}  ${dimSeparator}  ${since}`;
+		const row = `${icon} ${branch}${styledLabel}  ${persona} ${dimPipe} ${badge}  ${model}  ${gauge}  ${styledRate}  ${dimSeparator}  ${theme.fg("dim", totalTokens)}`;
+		return truncateTerminalLine(row, cols);
 	}
 
 	function renderPanel(ctx: ExtensionContext): void {
 		const timestamp = Date.now();
-		pruneWorkers(timestamp);
+		pruneWorkers(registry, timestamp);
 		const main = ensureState(ctx);
 		refreshAvgTps(main, timestamp);
-		const workers = [...registry.sessions.values()]
-			.filter((candidate) => candidate.role === "worker" && candidate.sessionId !== main.sessionId)
-			.sort((left, right) => {
-				if (left.phase === "complete" && right.phase !== "complete") return 1;
-				if (right.phase === "complete" && left.phase !== "complete") return -1;
-				return left.order - right.order;
-			});
+		const workers = [...registry.sessions.values()].filter(
+			(candidate) => candidate.role === "worker" && candidate.sessionId !== main.sessionId,
+		);
+		const treeRows = collectWorkerTree(main.sessionId, registry.sessions.values());
 
 		const mainActive = main.phase === "streaming" || main.phase === "tool";
 		let activeCount = mainActive ? 1 : 0;
@@ -600,18 +1028,20 @@ export default function throughput(pi: ExtensionAPI): void {
 		workerScale = Math.min(SCALE_CAP, workerScale);
 
 		const theme = ctx.ui.theme;
-		const cols = process.stdout.columns ?? 100;
+		const cols = Math.max(1, process.stdout.columns ?? 100);
 		if (cols !== cachedCols) {
 			cachedCols = cols;
 			const terminalWidth = Math.max(60, cols);
-			cachedLabelWidth = Math.min(24, Math.max(12, Math.floor((terminalWidth - 58) * 0.45)));
-			cachedModelWidth = Math.min(24, Math.max(14, terminalWidth - cachedLabelWidth - 52));
+			// Worker names are short CamelCase; agent names need room to tell peer reviewers apart.
+			cachedLabelCap = Math.min(20, Math.max(12, Math.floor((terminalWidth - 60) * 0.35)));
+			cachedAgentWidth = Math.min(13, Math.max(7, terminalWidth - cachedLabelCap - 57));
+			cachedModelWidth = Math.min(24, Math.max(14, terminalWidth - cachedLabelCap - cachedAgentWidth - 43));
 		}
 		const headerTps = main.avgTps;
 		const headerParts: string[] = [];
 		const chip =
 			(
-				(globalThis as Record<symbol, unknown>)[SESSION_MODE_KEY] as
+				(globalThis as Record<symbol, unknown>)[SESSION_PERSONA_KEY] as
 					| { paint?: (sessionId: string, tick: number) => string }
 					| undefined
 			)?.paint?.(main.sessionId, uiTick) ?? "\x1b[38;5;245mnormal\x1b[0m";
@@ -632,16 +1062,36 @@ export default function throughput(pi: ExtensionAPI): void {
 			theme.fg("dim", "·"),
 			theme.fg("dim", sinceLabel(main, timestamp)),
 		);
-		const header = headerParts.join(" ");
-		const shownWorkers = workers.slice(0, MAX_WORKER_ROWS);
+		const header = truncateTerminalLine(headerParts.join(" "), cols);
+		const shownWorkers = treeRows.slice(0, MAX_WORKER_ROWS).map((row) => ({
+			...row,
+			label: row.session.parentId && row.prefix.length > 0 && row.session.label.includes(".")
+				? row.session.label.slice(row.session.label.lastIndexOf(".") + 1)
+				: row.session.label,
+		}));
+		// Size the name column to the longest shown name, capped by terminal width; longer names get an ellipsis.
+		let labelWidth = 10;
+		for (const row of shownWorkers) labelWidth = Math.max(labelWidth, row.prefix.length + row.label.length);
+		labelWidth = Math.min(cachedLabelCap, labelWidth);
 		const lines = [
 			header,
-			...shownWorkers.map((worker) =>
-				workerRow(theme, worker, cachedLabelWidth, cachedModelWidth, workerScale, timestamp),
+			...shownWorkers.map((row) =>
+				workerRow(
+					theme,
+					row.session,
+					row.prefix,
+					row.label,
+					labelWidth,
+					cachedAgentWidth,
+					cachedModelWidth,
+					workerScale,
+					timestamp,
+					cols,
+				),
 			),
 		];
-		if (workers.length > shownWorkers.length) {
-			lines.push(theme.fg("dim", `  … ${workers.length - shownWorkers.length} more workers`));
+		if (treeRows.length > shownWorkers.length) {
+			lines.push(truncateTerminalLine(theme.fg("dim", `  … ${treeRows.length - shownWorkers.length} more workers`), cols));
 		}
 		ctx.ui.setWidget("throughput-workers", lines, { placement: "aboveEditor" });
 	}
@@ -762,31 +1212,14 @@ export default function throughput(pi: ExtensionAPI): void {
 		}
 	});
 
-	pi.on("tool_call", (event) => {
-		if (event.toolName !== "task") return;
-		if (!("input" in event) || !event.input || typeof event.input !== "object") return;
-		const input = event.input;
-		const record = (name: unknown, agent: unknown): void => {
-			if (typeof name === "string" && name) {
-				nameToAgent.set(name, typeof agent === "string" && agent ? agent : "task");
-			}
-		};
-		if ("tasks" in input && Array.isArray(input.tasks)) {
-			for (const item of input.tasks) {
-				if (item && typeof item === "object") {
-					const name = "name" in item ? item.name : undefined;
-					const agent = "agent" in item ? item.agent : undefined;
-					record(name, agent);
-				}
-			}
-		} else {
-			const name = "name" in input ? input.name : undefined;
-			const agent = "agent" in input ? input.agent : undefined;
-			record(name, agent);
-		}
+	pi.on("tool_call", (event, ctx) => {
+		if (event.toolName !== "task" || !("input" in event)) return;
+		const parentSessionId = ctx.sessionManager.getSessionId();
+		queuePendingSpawns(registry, parseTaskSpawns(event.input, parentSessionId, Date.now(), event.toolCallId));
 	});
 	pi.on("session_shutdown", (_event, ctx) => {
 		stopUi(ctx);
+		clearPendingSpawns(registry, ctx.sessionManager.getSessionId());
 		removeCurrentState();
 	});
 }

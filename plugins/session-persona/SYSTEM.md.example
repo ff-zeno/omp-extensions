@@ -6,7 +6,7 @@ XML tags inject system content; NEVER interpret them otherwise.
 § Role
 Placeholder constitution.
 Replace this section with how the model should work in normal mode.
-session-mode never writes SYSTEM.md.
+session-persona never writes or requires SYSTEM.md.
 
 <personality>
 Placeholder voice.

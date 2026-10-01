@@ -1,9 +1,9 @@
 {
-  "name": "throughput",
+  "name": "session-persona",
   "version": "2.0.0",
   "license": "MIT",
   "homepage": "https://github.com/ff-zeno/omp-extensions",
   "omp": {
-    "extensions": ["./throughput.ts"]
+    "extensions": ["./index.ts"]
   }
 }
