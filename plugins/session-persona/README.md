@@ -2,7 +2,7 @@
 
 `session-persona` adds a per-session persona cycle for normal, orchestrate, and brute work.
 
-Run `/persona` or press Ctrl+Alt+P to cycle normal → orchestrate → brute.
+Run `/persona` or press Alt+O to cycle normal → orchestrate → brute.
 
 The cycle is independent of the Ctrl+P model cycle.
 
@@ -72,7 +72,7 @@ This plugin never writes `config.yml` or `keybindings.yml`.
 | `/normal` | Set the persona to normal. |
 | `/orchestrate` | Set the persona to orchestrate. |
 | `/brute` | Set the persona to brute. |
-| Ctrl+Alt+P | Same as `/persona` with no name. |
+| Alt+O | Same as `/persona` with no name. |
 
 An unknown name such as `/persona fast` lists the valid names and leaves the persona unchanged.
 The cycle is independent of the Ctrl+P model cycle.
@@ -90,7 +90,7 @@ sessionPersona.cycle: alt+shift+k
 
 Use several chords:
 ```yaml
-sessionPersona.cycle: [ctrl+alt+p, f8]
+sessionPersona.cycle: [alt+o, f8]
 ```
 
 Turn the hotkey off:
@@ -98,7 +98,7 @@ Turn the hotkey off:
 sessionPersona.cycle: []
 ```
 
-Delete the entry to go back to Ctrl+Alt+P.
+Delete the entry to go back to Alt+O.
 Restart OMP after changing it, because OMP binds extension hotkeys once at startup.
 
 A chord is modifiers joined with `+` and then a key, for example `ctrl+alt+p` or `alt+shift+k`.
@@ -116,7 +116,7 @@ With a named OMP profile, the plugin reads the profile's `keybindings.yml` on to
 
 On macOS, Alt is the Option key.
 Terminal.app and iTerm2 send Option as a character, not as Alt, unless you turn on "Use Option as Meta key" (Terminal.app) or set the Option key to "Esc+" (iTerm2).
-Without that setting, Ctrl+Alt+P and other Alt chords do not reach OMP.
+Without that setting, Alt+O and other Alt chords do not reach OMP.
 
 Terminals and editors can capture a chord before OMP sees it.
 VS Code and Cursor terminals send many Ctrl and Alt chords to the editor first; set `terminal.integrated.sendKeybindingsToShell` to `true` or pick another chord.
@@ -126,7 +126,7 @@ tmux, screen, and window managers can also grab chords.
 
 ## Verify
 
-Press Ctrl+Alt+P or run `/persona` and confirm the "Persona: ..." notification and the status-line mode.
+Press Alt+O or run `/persona` and confirm the "Persona: ..." notification and the status-line mode.
 Type `/persona` and confirm its description in the command list names the chord you chose, or says nothing about a hotkey when you turned it off.
 Run `/extensions` and confirm `session-persona` is listed.
 From a shell, `omp plugin list` lists it and `omp plugin doctor` reports load errors.
@@ -167,7 +167,7 @@ In normal mode the hook returns no system-prompt override, so OMP restores its b
 
 Task requests propagate a persona through the `mode` field, `# Mode:` or `# Persona:` headers, `[orch]` name tags, and `agent: "orchestrator"`.
 
-Orchestrator dispatch is clamped when the current subagent is not orchestrate or its depth is already 2 or greater.
+Only the top-level session can dispatch an orchestrator, so orchestrators never nest; a subagent's orchestrator request, whatever its own persona, is clamped to a normal `task`.
 
 The extension applies the persona a parent asks for; choosing it is prompt guidance, not code.
 When the parent names none, a router may suggest one through the `Symbol.for("omp.persona-suggestions.v1")` registry, keyed `<parent agent id>:<child agent id>`; the companion `intelligent-auto-agents` plugin does this.

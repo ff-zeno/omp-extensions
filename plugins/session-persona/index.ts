@@ -1,5 +1,5 @@
 // Session persona: /persona, /normal, /orchestrate, /brute, and a cycle hotkey
-// (default Ctrl+Alt+P) for normal → orchestrate → brute.
+// (default Alt+O) for normal → orchestrate → brute.
 // Independent of the Ctrl+P model cycle.
 // Replaces the SYSTEM.md customPrompt slot. APPEND_SYSTEM.md stays.
 
@@ -45,7 +45,7 @@ const MODE_FINGERPRINT: Record<Exclude<SessionMode, "normal">, string> = {
 
 // Read from OMP's own keybindings file; OMP's loader keeps unknown ids and skips them.
 const CYCLE_KEYBINDING = "sessionPersona.cycle";
-const DEFAULT_CYCLE_KEYS = ["ctrl+alt+p"];
+const DEFAULT_CYCLE_KEYS = ["alt+o"];
 // Same lookup order as OMP's keybindings loader: the first file that exists wins.
 const KEYBINDING_FILES = ["keybindings.yml", "keybindings.yaml", "keybindings.json"];
 const MODIFIER_ORDER = ["ctrl", "shift", "alt", "super"];
@@ -188,11 +188,6 @@ function sessionId(ctx: ExtensionContext): string {
 
 function pendingModeKey(parentAgentId: string, workerName: string): string {
 	return `${parentAgentId}:${workerName}`;
-}
-
-function canDispatchOrchestrator(ctx: ExtensionContext): boolean {
-	if (ctx.agent.kind !== "sub") return true;
-	return getMode(sessionId(ctx)) === "orchestrate" && ctx.agent.depth < 2;
 }
 
 function getMode(id: string): SessionMode {
@@ -515,7 +510,8 @@ export default function sessionPersona(pi: ExtensionAPI): void {
 		if (event.toolName !== "task" || !("input" in event) || !event.input || typeof event.input !== "object") return;
 		const input = event.input as Record<string, unknown>;
 		const parentId = ctx.agent.id;
-		const canDispatch = canDispatchOrchestrator(ctx);
+		// Only the top-level session may spawn an orchestrator; orchestrators never nest.
+		const canDispatch = ctx.agent.kind !== "sub";
 		const registry = getRegistry();
 		const timestamp = Date.now();
 		expirePendingModes(registry, timestamp);

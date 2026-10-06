@@ -15,7 +15,7 @@
     },
     {
       "name": "session-persona",
-      "description": "/persona commands and a remappable Ctrl+Alt+P cycle for the session persona (normal, orchestrate, brute), inherited by subagents",
+      "description": "/persona commands and a remappable Alt+O cycle for the session persona (normal, orchestrate, brute), inherited by subagents",
       "source": "./plugins/session-persona",
       "license": "MIT"
     },

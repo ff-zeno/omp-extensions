@@ -384,24 +384,23 @@ describe("session persona modes", () => {
 		}
 	});
 
-	test("clamps orchestrator dispatch using agent kind and depth", () => {
+	test("clamps every subagent's orchestrator request, whatever its persona or depth", () => {
 		const hooks = registerExtension();
-		for (const [id, mode, depth, allowed] of [
-			["normal-child", "normal", 1, false],
-			["brute-child", "brute", 0, false],
-			["deep-orchestrator", "orchestrate", 2, false],
-			["authorized-orchestrator", "orchestrate", 1, true],
-			["depth-zero-orchestrator", "orchestrate", 0, true],
+		for (const [id, mode, depth] of [
+			["normal-child", "normal", 1],
+			["brute-child", "brute", 1],
+			["orchestrator-child", "orchestrate", 1],
+			["deep-orchestrator", "orchestrate", 2],
 		] as const) {
 			registry().setMode(id, mode);
 			const parent = context(id, id, {
 				agent: { kind: "sub", id: `agent-${id}`, name: "task", depth, parentId: "root-agent" },
 			});
-			const input = { tasks: [{ name: `${id}-spawn`, agent: "orchestrator" }] };
+			const input = { tasks: [{ name: `${id}-spawn`, agent: "orchestrator", task: "# Mode: orchestrate\nsplit it" }] };
 			dispatch(hooks, parent, input, `${id}-call-1234`);
-			expect(input.tasks[0]?.agent).toBe(allowed ? "orchestrator" : "task");
-			expect(registry().pendingMode.get(`agent-${id}:${id}-spawn`)?.[0]?.mode)
-				.toBe(allowed ? "orchestrate" : "normal");
+			expect(input.tasks[0]?.agent).toBe("task");
+			expect(input.tasks[0]?.task).toStartWith("# Mode: normal");
+			expect(registry().pendingMode.get(`agent-${id}:${id}-spawn`)?.[0]?.mode).toBe("normal");
 		}
 	});
 
@@ -584,18 +583,18 @@ describe("persona commands", () => {
 });
 
 describe("persona hotkey", () => {
-	test("binds Ctrl+Alt+P by default and names it in the descriptions", () => {
+	test("binds Alt+O by default and names it in the descriptions", () => {
 		const registration = load();
-		expect([...registration.shortcuts.keys()]).toEqual(["ctrl+alt+p"]);
-		expect(registration.shortcuts.get("ctrl+alt+p")?.description).toContain("(Ctrl+Alt+P)");
-		expect(registration.commands.get("persona")?.description).toContain("(Ctrl+Alt+P)");
+		expect([...registration.shortcuts.keys()]).toEqual(["alt+o"]);
+		expect(registration.shortcuts.get("alt+o")?.description).toContain("(Alt+O)");
+		expect(registration.commands.get("persona")?.description).toContain("(Alt+O)");
 		expect(startupNotices(registration)).toEqual([]);
 	});
 
 	test("the hotkey cycles the persona", () => {
 		const registration = load();
 		const ctx = context("hotkey-cycle", "main");
-		const handler = registration.shortcuts.get("ctrl+alt+p")?.handler;
+		const handler = registration.shortcuts.get("alt+o")?.handler;
 		handler?.(ctx);
 		expect(registry().getMode("hotkey-cycle")).toBe("orchestrate");
 		handler?.(ctx);
@@ -644,13 +643,13 @@ describe("persona hotkey", () => {
 
 	test("a value that is neither a chord nor a list keeps the default with a notice", () => {
 		const registration = loadWithKeybindings("sessionPersona.cycle:\n  key: ctrl+alt+x\n");
-		expect([...registration.shortcuts.keys()]).toEqual(["ctrl+alt+p"]);
+		expect([...registration.shortcuts.keys()]).toEqual(["alt+o"]);
 		expect(startupNotices(registration)[0]).toContain("must be a chord or a list of chords");
 	});
 
 	test("an unparsable keybindings file keeps the default with a notice", () => {
 		const registration = loadWithKeybindings("sessionPersona.cycle: [ctrl+alt+x\n");
-		expect([...registration.shortcuts.keys()]).toEqual(["ctrl+alt+p"]);
+		expect([...registration.shortcuts.keys()]).toEqual(["alt+o"]);
 		expect(startupNotices(registration)[0]).toContain("cannot read");
 	});
 
