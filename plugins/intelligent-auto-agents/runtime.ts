@@ -672,7 +672,7 @@ export function register(pi: ExtensionAPI): void {
 
 	pi.on("before_subagent_spawn", async (event, ctx) => {
 		let readinessUsage: UsageSummary | undefined;
-		if (event.agent === "plan" && ctx.agent.kind === "main") {
+		if (catalog.planningReadiness.agents.includes(event.agent) && ctx.agent.kind === "main") {
 			const { result: readiness, latencyMs } = await withJevActivity(ctx, "checking planning readiness", () =>
 				evaluatePlanningReadiness(event.assignment, catalog, evaluator(ctx), event.signal),
 			);
@@ -851,7 +851,7 @@ export function register(pi: ExtensionAPI): void {
 			const exact = `${model.provider}/${model.id}`;
 			const supported = getSupportedEfforts(model);
 			const effort = pinnedEffort
-				? fitEffort(capEffort(exact, pinnedEffort), supported)
+				? fitEffort(capEffort(catalog, exact, pinnedEffort), supported)
 				: effortForModel(catalog, exact, difficulty, range, supported);
 			return effort ? { slot: spec, model, exact, effort } : undefined;
 		};
@@ -879,7 +879,9 @@ export function register(pi: ExtensionAPI): void {
 							...(spec.minWeeklyHeadroom !== undefined ? { minWeeklyHeadroom: spec.minWeeklyHeadroom } : {}),
 							...(spec.minMonthlyHeadroom !== undefined ? { minMonthlyHeadroom: spec.minMonthlyHeadroom } : {}),
 							...(counter !== undefined ? { counter } : {}),
-							penaltyKind: model.provider === "xai-oauth" ? ("weekly" as const) : ("short" as const),
+							penaltyKind:
+								catalog.poolLimits.burstPenaltyWindow[model.provider] ??
+								catalog.poolLimits.burstPenaltyWindow["*"],
 						} satisfies PoolMember,
 					];
 				});
@@ -911,7 +913,7 @@ export function register(pi: ExtensionAPI): void {
 					const modelId = `${member.model.provider}/${member.model.id}`;
 					const supported = getSupportedEfforts(member.model);
 					const effort = member.effort
-						? fitEffort(capEffort(modelId, member.effort), supported)
+						? fitEffort(capEffort(catalog, modelId, member.effort), supported)
 						: effortForModel(catalog, modelId, difficulty, taskType.effort, supported);
 					if (effort) pushUnique({ slot: id, model: member.model, exact: modelId, effort });
 				}

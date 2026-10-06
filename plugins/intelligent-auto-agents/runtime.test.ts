@@ -439,6 +439,14 @@ describe("intelligent auto-agents runtime", () => {
 		expect(judgeRequests.every(request => !Object.keys(request.questions.route?.criteria ?? {}).includes("discuss-with-user"))).toBe(true);
 	});
 
+	test("planning readiness only runs for a catalog readiness agent on main", async () => {
+		reset();
+		routeChoice = "grunt";
+		const fixture = createFixture();
+		await spawn(fixture, { agent: "task" });
+		expect(judgeRequests.every(request => !Object.keys(request.questions.route?.criteria ?? {}).includes("discuss-with-user"))).toBe(true);
+	});
+
 	test("solutionSpace is fed to Jev but never persisted", async () => {
 		reset();
 		routeChoice = "grunt";

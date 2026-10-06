@@ -86,6 +86,12 @@ describe("catalog v7", () => {
 		expect(catalog.agents.pinned).toContain("review-frontier-3");
 		expect(catalog.directiveTargets).toMatchObject({ "frontier-1": "@frontier-1", grunt: "@grunt", vision: "@vision" });
 		expect(catalog.nuances.length).toBeGreaterThan(0);
+		expect(catalog.planningReadiness.agents).toEqual(["plan"]);
+		expect(catalog.models["anthropic/claude-sonnet-5-5"].maxEffort).toBe("low");
+		expect(catalog.reviewOnly.pools).toEqual(["plan-review"]);
+		expect(catalog.poolLimits.burstPenaltyWindow["*"]).toBe("short");
+		expect(catalog.blockedDirectiveTargets).toEqual(["luna", "astra"]);
+		expect(catalog.jevInstructions.route.length).toBeGreaterThan(0);
 	});
 
 	test("rejects catalogs that break the routing contract", () => {
@@ -95,8 +101,8 @@ describe("catalog v7", () => {
 		expect(() => parseCatalog(wrongVersion)).toThrow("settings");
 
 		const missingPool = clone();
-		delete (missingPool.pools as Record<string, unknown>)["plan-review"];
-		expect(() => parseCatalog(missingPool)).toThrow("mechanical, grunt, and plan-review");
+		delete (missingPool.pools as Record<string, unknown>)["mechanical"];
+		expect(() => parseCatalog(missingPool)).toThrow("unknown pool");
 
 		const unknownPool = clone();
 		(unknownPool.taskTypes as Record<string, Record<string, unknown>>).grunt.pool = "nope";
@@ -117,21 +123,73 @@ describe("catalog v7", () => {
 		// Supports includes max, so this parses; a map value outside `supports` is what the parser rejects.
 		expect(() => parseCatalog(mappedOutOfRange)).not.toThrow();
 
+		const maxOnFallback = clone();
+		((maxOnFallback.models as Record<string, Record<string, unknown>>)["*"] as Record<string, unknown>).maxEffort = "low";
+		expect(() => parseCatalog(maxOnFallback)).toThrow("settings");
+
+		const maxOutsideSupports = clone();
+		(
+			(maxOutsideSupports.models as Record<string, Record<string, unknown>>)["google-antigravity/gemini-3.8-flash"] as Record<
+				string,
+				unknown
+			>
+		).maxEffort = "xhigh";
+		expect(() => parseCatalog(maxOutsideSupports)).toThrow("model map");
+
+		const missingInstructions = clone();
+		delete (missingInstructions.jevInstructions as Record<string, unknown>).route;
+		expect(() => parseCatalog(missingInstructions)).toThrow("settings");
+
+		const emptyReadinessAgents = clone();
+		(emptyReadinessAgents.planningReadiness as Record<string, unknown>).agents = [];
+		expect(() => parseCatalog(emptyReadinessAgents)).toThrow("settings");
+
+		const duplicateReadinessAgents = clone();
+		(duplicateReadinessAgents.planningReadiness as Record<string, unknown>).agents = ["plan", "plan"];
+		expect(() => parseCatalog(duplicateReadinessAgents)).toThrow("settings");
+
+		const missingWindowDefault = clone();
+		delete ((missingWindowDefault.poolLimits as Record<string, unknown>).burstPenaltyWindow as Record<string, unknown>)["*"];
+		expect(() => parseCatalog(missingWindowDefault)).toThrow("settings");
+
+		const unknownReviewPool = clone();
+		(unknownReviewPool.reviewOnly as Record<string, unknown>).pools = ["nope"];
+		expect(() => parseCatalog(unknownReviewPool)).toThrow("unknown pool");
+
 		const solPool = clone();
 		(
 			((solPool.pools as Record<string, Record<string, unknown>>).grunt.members as Array<Record<string, unknown>>)[0]
 		).model = "openai-codex/gpt-6.1-sol";
 		expect(() => parseCatalog(solPool)).toThrow("cannot take worker work");
 
+		const solTaskModel = clone();
+		(solTaskModel.taskTypes as Record<string, Record<string, unknown>>).lead.model = "@manager";
+		expect(() => parseCatalog(solTaskModel)).toThrow("cannot take worker work");
+
+		const solBackup = clone();
+		(solBackup.taskTypes as Record<string, Record<string, unknown>>).vision.backups = ["@advisor"];
+		expect(() => parseCatalog(solBackup)).toThrow("cannot take worker work");
+
 		const lunaDirective = clone();
 		(lunaDirective.directiveTargets as Record<string, string>)["frontier-1"] = "openai-codex/gpt-5.6-luna";
-		expect(() => parseCatalog(lunaDirective)).toThrow("luna");
+		expect(() => parseCatalog(lunaDirective)).toThrow("cannot name");
+
+		const astraDirective = clone();
+		(astraDirective.directiveTargets as Record<string, string>)["frontier-1"] = "provider/astra-1";
+		expect(() => parseCatalog(astraDirective)).toThrow("cannot name");
 
 		const solPlanReview = clone();
 		(
 			((solPlanReview.pools as Record<string, Record<string, unknown>>)["plan-review"].members as Array<Record<string, unknown>>)[0]
 		).model = "openai-codex/gpt-6.1-sol";
 		expect(() => parseCatalog(solPlanReview)).not.toThrow();
+
+		// The fixed mechanical/grunt/plan-review pools are no longer required; only task-type pool
+		// references must resolve.
+		const noFixedPools = clone();
+		delete (noFixedPools.pools as Record<string, unknown>)["mechanical"];
+		(noFixedPools.taskTypes as Record<string, Record<string, unknown>>).mechanical.pool = "grunt";
+		expect(() => parseCatalog(noFixedPools)).not.toThrow();
 	});
 });
 
@@ -143,12 +201,14 @@ describe("effort resolution", () => {
 		expect(modelDifficultyEffort(catalog, "no-such/model", "ordinary")).toBe("medium");
 	});
 
-	test("clamps into a task-type range, caps Sonnet, then fits the model's supported efforts", () => {
+	test("clamps into a task-type range, caps the model's maxEffort, then fits its supported efforts", () => {
 		expect(clampEffort("xhigh", ["medium", "high"])).toBe("high");
 		expect(clampEffort("low", ["medium", "high"])).toBe("medium");
 		expect(clampEffort("high", undefined)).toBe("high");
-		expect(capEffort("anthropic/claude-sonnet-5-5", "xhigh")).toBe("low");
-		expect(capEffort("xai-oauth/grok-4.6", "xhigh")).toBe("xhigh");
+		expect(capEffort(catalog, "anthropic/claude-sonnet-5-5", "xhigh")).toBe("low");
+		expect(capEffort(catalog, "anthropic/claude-sonnet-5-5", "low")).toBe("low");
+		expect(capEffort(catalog, "xai-oauth/grok-4.6", "xhigh")).toBe("xhigh");
+		expect(capEffort(catalog, "no-such/model", "max")).toBe("max");
 		expect(fitEffort("xhigh", ["low", "high"])).toBe("high");
 		expect(fitEffort("medium", ["low", "high"])).toBe("low");
 		expect(fitEffort("high", ["low"])).toBe("low");
@@ -156,6 +216,12 @@ describe("effort resolution", () => {
 		expect(effortForModel(catalog, "anthropic/claude-opus-5-5", "critical", ["high", "xhigh"])).toBe("xhigh");
 		expect(effortForModel(catalog, "surplus/deepseek-v4.1-flash", "critical", ["low", "high"])).toBe("low");
 		expect(effortForModel(catalog, "xai-oauth/grok-4.6", "hard", ["low", "high"])).toBe("high");
+	});
+
+	test("caps a pinned effort at the model's catalog maxEffort", () => {
+		// Sonnet's map already resolves hard work to low; a pool member pinning high is capped too.
+		expect(effortForModel(catalog, "anthropic/claude-sonnet-5-5", "critical", ["high", "xhigh"])).toBe("low");
+		expect(capEffort(catalog, "anthropic/claude-sonnet-5-5", "max")).toBe("low");
 	});
 
 	test("knows which task types depend on the difficulty rating", () => {
@@ -290,6 +356,24 @@ describe("pool ranking", () => {
 		expect(samples.map(sample => sample.kind).sort()).toEqual(["monthly", "weekly"]);
 		expect(samples.every(sample => sample.usedFraction === 0.2)).toBe(true);
 	});
+
+	test("picks the burst-penalty window from the catalog", () => {
+		const provider = "acme";
+		const target = member(provider, "model", { maxShortUsed: 0.9, minWeeklyHeadroom: 0, penaltyKind: undefined });
+		const penalties = new Map([[`${provider}/model`, 0.02]]);
+		const usage = { reports: [report(provider, 0.79)] as never, credentialCounts: {} };
+		const base = structuredClone(catalog.poolLimits);
+
+		// No entry for the provider, so the `*` default (short) receives the penalty.
+		const fallbackUsed = rankPool([target], usage, penalties, [], base, Date.now()).verdicts[`${provider}/model`]?.used;
+		expect(fallbackUsed?.short).toBeCloseTo(0.81, 5);
+		expect(fallbackUsed?.weekly).toBeCloseTo(0.79, 5);
+
+		const weekly = { ...base, burstPenaltyWindow: { ...base.burstPenaltyWindow, [provider]: "weekly" as const } };
+		const mappedUsed = rankPool([target], usage, penalties, [], weekly, Date.now()).verdicts[`${provider}/model`]?.used;
+		expect(mappedUsed?.short).toBeCloseTo(0.79, 5);
+		expect(mappedUsed?.weekly).toBeCloseTo(0.81, 5);
+	});
 });
 
 describe("Jev classification", () => {
@@ -337,6 +421,16 @@ describe("Jev classification", () => {
 		expect(decision).toMatchObject({ source: "baseline", reason: "uncertain-difficulty" });
 	});
 
+	test("sends the catalog's Jev instructions for both questions", async () => {
+		const requests: Array<Parameters<Evaluate>[0]> = [];
+		await choose("state", slots, true, catalog, async request => {
+			requests.push(request);
+			return { answers: { route: choice("lead", ["grunt", "lead"]), difficulty: score(2) } };
+		});
+		expect(requests[0].questions.route?.instructions).toBe(catalog.jevInstructions.route);
+		expect(requests[0].questions.difficulty?.instructions).toBe(catalog.jevInstructions.difficulty);
+	});
+
 	test("returns a baseline when there is nothing to classify", async () => {
 		expect(await choose("state", [], false, catalog, evaluateFrom({}))).toMatchObject({
 			source: "baseline",
@@ -348,6 +442,16 @@ describe("Jev classification", () => {
 		const controller = new AbortController();
 		controller.abort();
 		await expect(choose("state", slots, true, catalog, evaluateFrom({}), controller.signal)).rejects.toThrow();
+	});
+
+	test("sends the catalog's planning readiness instructions and routes", async () => {
+		const requests: Array<Parameters<Evaluate>[0]> = [];
+		await evaluatePlanningReadiness("task", catalog, async request => {
+			requests.push(request);
+			return { answers: { route: choice("autonomous-plan", ["autonomous-plan", "discuss-with-user"]) } };
+		});
+		expect(requests[0].questions.route?.instructions).toBe(catalog.planningReadiness.instructions);
+		expect(Object.keys(requests[0].questions.route?.criteria ?? {})).toEqual(["autonomous-plan", "discuss-with-user"]);
 	});
 
 	test("rates planning readiness and defaults to discuss-with-user when unclear", async () => {

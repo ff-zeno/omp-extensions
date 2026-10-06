@@ -220,27 +220,34 @@ The command never changes the current chat model.
 
 ## Editing `catalog.json`
 
-Edit `catalog.json` next to `index.ts` to change pools, task types, directive targets, the difficulty-to-effort maps, readiness wording, limits, or the Jev model selector.
+`catalog.json` next to `index.ts` holds every routing decision: pools, task types, directive targets, difficulty-to-effort maps, Jev's instructions, readiness wording, model restrictions, quota limits, and the Jev model selector.
+The TypeScript validates and applies the catalog but carries no model names or routing preferences of its own, so change routing here rather than in code.
 
-Keep the catalog version and schema valid.
+Keep the catalog version and schema valid; the plugin refuses to load a catalog that fails validation.
 
-`pools` holds `mechanical`, `grunt`, and `plan-review`. Each pool lists ordered `members`, each naming a role alias or a literal `provider/model`, plus a `fallback`. A member may set `effort` (pins its effort), `difficulties` (the levels it serves; absent means every level), and the quota gates `maxShortUsed`, `minWeeklyHeadroom`, and `minMonthlyHeadroom`. The `plan-review` pool sets `excludePlanAuthors`, so Jev drops every model named in the plan's `plan:` front matter and prefers a member that has not already reviewed the plan.
+`jevInstructions` holds the instructions Jev receives for the task-type question (`route`) and the difficulty rating (`difficulty`). `difficulty` describes each level, and `nuances` lists judgment notes passed to Jev verbatim.
 
-`taskTypes` binds each kind of work (`mechanical`, `grunt`, `lead`, `vision`, `security-review`, `plan`, `plan-review`, `frontier-review`) to exactly one pool or fixed `model`, plus an optional `effort` range and `backups`.
+`planningReadiness` gates planning spawns: for a top-level spawn of an agent in `agents`, Jev answers `instructions` with one of `routes` (`autonomous-plan` or `discuss-with-user`), and `discuss-with-user` blocks the spawn so the main chat settles the open questions first.
 
-`models` holds each model's `supports` list and its difficulty-to-effort map for `exact`, `ordinary`, `hard`, and `critical`; `*` is the fallback map. The task-type effort range clamps the map, then the model's `supports` list trims it.
+`pools` names ordered worker pools; the shipped catalog has `mechanical`, `grunt`, and `plan-review`. Each pool lists ordered `members`, each naming a role alias or a literal `provider/model`, plus a `fallback`. A member may set `effort` (pins its effort), `difficulties` (the levels it serves; absent means every level), and the quota gates `maxShortUsed`, `minWeeklyHeadroom`, and `minMonthlyHeadroom`. A pool with `excludePlanAuthors` drops every model named in the plan's `plan:` front matter and prefers a member that has not already reviewed the plan.
 
-`agents.covered` lists the agents routed through task types; `agents.pinned` lists the agents that keep their bound model and receive only effort. `directiveTargets` maps a `Directive:` alias to a role.
+`taskTypes` binds each kind of work (`mechanical`, `grunt`, `lead`, `vision`, `security-review`, `plan`, `plan-review`, `frontier-review`) to exactly one existing pool or fixed `model`, plus an optional `effort` range and `backups`.
+
+`models` holds each model's `supports` list and its difficulty-to-effort map for `exact`, `ordinary`, `hard`, and `critical`; `*` is the fallback map. The task-type effort range clamps the map, then the model's `supports` list trims it. An optional `maxEffort` caps the model even when a pool member pins a higher effort; the shipped catalog caps `anthropic/claude-sonnet-5-5` at `low`.
+
+`reviewOnly` keeps models off worker duty. A catalog reference that exactly matches an entry in `reviewOnly.models` (a literal `provider/model` or a role alias), or contains a `reviewOnly.containing` substring (case-insensitive), may appear only in the pools named in `reviewOnly.pools`. The plugin refuses a catalog that puts one in another pool, a task-type `model`, or a `backups` list. The shipped catalog keeps the Codex models and their role aliases to plan review.
+
+`agents.covered` lists the agents routed through task types; `agents.pinned` lists the agents that keep their bound model and receive only effort. `directiveTargets` maps a `Directive:` alias to a role, and `blockedDirectiveTargets` lists case-insensitive substrings no directive target may contain.
 
 Each quota threshold that is set requires its window: a member without that window in its usage report is not eligible.
-`poolLimits` holds the shared guardrails: `demoteAt`, `skipAt`, the per-dispatch `burstPenalty`, `finalWindowMs`, usage timeout and maximum report age, clock-skew tolerance, and the failure streak and duration for demotion.
+`poolLimits` holds the shared guardrails: `demoteAt`, `skipAt`, the per-dispatch `burstPenalty`, `burstPenaltyWindow` (which quota window a provider's in-flight burst penalty counts against, keyed by provider with a required `*` default), `finalWindowMs`, usage timeout and maximum report age, clock-skew tolerance, and the failure streak and duration for demotion.
 Within `finalWindowMs` of a weekly reset, unused weekly quota would be lost, so the weekly pace check and weekly crowding are lifted and the short-window cap rises to `demoteAt`.
 In that stretch, in-flight burst penalties also count against the weekly window, and `skipAt` stops new work, so running tasks keep `1 - skipAt` of the quota to finish.
 Usage comes from the same provider reports as `/usage`. Antigravity is read through its Gemini counter, xAI through its aggregate credit pool, and Anthropic through its shared 5-hour and weekly windows. The plugin assumes `providers.antigravityEndpoint` is `auto`.
 
 ## Development
 
-Edit `catalog.json` and the TypeScript sources in place, then run the plugin tests:
+Change routing in `catalog.json`; change the TypeScript only for new mechanics. Then run the plugin tests:
 
 ```
 bun test
