@@ -2,6 +2,8 @@
 
 Oh My Pi marketplace with three plugins.
 
+![How a subagent gets its model and persona: Jev picks the model and effort, session-persona picks the persona, throughput shows the worker tree](docs/overview.png)
+
 | Plugin | What it does | Needs |
 |---|---|---|
 | `throughput` | TPS sparkline, TTFB, and a tree of worker rows with model, gauge, and token counts. | Stock OMP 18.4.9 or newer |
