@@ -72,7 +72,8 @@ One `[Unreleased]` bullet summarizing the hook extension.
 
 Exports `SUBAGENT_ROUTING_API_VERSION = 2` as the compatibility seam the plugin checks at build time.
 The marker stays at 2: `solutionSpace` is an optional, additive event field that changes no routing semantics, so the seam contract the plugin gates on is unchanged.
-Adds to `BeforeSubagentSpawnEvent`: `assignment`, `context?`, `solutionSpace?`, `model?`, `thinkingLevel?`, `modelLocked`, `effortLocked`, and `signal?`.
+Adds to `BeforeSubagentSpawnEvent`: `assignment`, `context?`, `solutionSpace?`, `thinkingLevel?`, `modelLocked`, `effortLocked`, and `signal?`.
+The baseline model patterns are the existing `patterns` field; the event carries no separate `model` copy.
 Adds `thinkingLevel?` to `BeforeSubagentSpawnEventResult`.
 
 ### packages/coding-agent/src/extensibility/extensions/runner.ts
@@ -90,6 +91,7 @@ Re-exports `SUBAGENT_ROUTING_API_VERSION` and `getSupportedEfforts` from the pac
 Adds `routing?: "auto" | "off"` to `StructuredSubagentRequest`.
 Adds `resolveRoutingModel` (resolves a returned pattern list to a concrete model or throws a preflight error) and `validateRoutingThinkingLevel` (rejects an unknown or unsupported level).
 Rewrites `applySpawnHook` to track `modelLocked`/`effortLocked`, pin the resolved model when a thinking level is chosen, keep the routed backup patterns after the resolved primary, honor `routing: "off"`, forward the task's trimmed `solutionSpace` onto the emitted event, and return the rebuilt `nextPolicy`.
+When a route replaces or pins the model, it clears `modelInheritsLiveThinkingLevel`, as stock does, so a routed `:level` suffix is not demoted to an inherited parent effort.
 
 ### packages/coding-agent/src/task/index.ts
 
@@ -134,7 +136,7 @@ Adds `routing?: "auto" | "off"` to `TaskItem` and `TaskParams`.
 
 ### Test files
 
-`test/agent-session-prewalk.test.ts`, `test/agent-session-retry-fallback.test.ts`, `test/extensions-runner.test.ts`, `test/issue-2750-subagent-runtime-fallback.test.ts`, `test/task/structured-subagent.test.ts`, `test/task/wire-schema.test.ts`, and `test/task/workpool.test.ts` cover the new hook behavior, the routing schema, and the routed retry chain.
+`test/agent-session-retry-fallback.test.ts`, `test/extensions-runner.test.ts`, `test/issue-2750-subagent-runtime-fallback.test.ts`, `test/task/structured-subagent.test.ts`, `test/task/wire-schema.test.ts`, and `test/task/workpool.test.ts` cover the new hook behavior, the routing schema, and the routed retry chain.
 
 ## Folding this patch into stock OMP instead
 
