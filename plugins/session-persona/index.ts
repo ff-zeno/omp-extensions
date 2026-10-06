@@ -105,8 +105,20 @@ interface PendingMode {
 	parentAgentId: string;
 	workerName: string;
 	mode: SessionMode;
+	/** The parent named this persona; a router suggestion never overrides it. */
+	explicit: boolean;
 	createdAt: number;
 }
+
+/**
+ * A persona a subagent router (intelligent-auto-agents) suggested for one child, keyed
+ * `<parent agent id>:<child agent id>`. Applied only when the parent named no persona.
+ */
+interface PersonaSuggestion {
+	persona: unknown;
+	createdAt: number;
+}
+const PERSONA_SUGGESTIONS = Symbol.for("omp.persona-suggestions.v1");
 
 interface Registry {
 	mode: Map<string, SessionMode>;
@@ -117,6 +129,34 @@ interface Registry {
 }
 
 const PENDING_MODE_TTL_MS = 60_000;
+
+function personaSuggestions(): Map<string, PersonaSuggestion> | undefined {
+	const store = globalThis as typeof globalThis & { [PERSONA_SUGGESTIONS]?: Map<string, PersonaSuggestion> };
+	return store[PERSONA_SUGGESTIONS];
+}
+
+/** Claim this child's suggestion. Routers may only suggest normal or brute; orchestrate stays the parent's call. */
+function takePersonaSuggestion(ctx: ExtensionContext): SessionMode | undefined {
+	const parentId = ctx.agent.parentId;
+	const suggestions = personaSuggestions();
+	if (parentId === undefined || !suggestions) return undefined;
+	const key = `${parentId}:${ctx.agent.id}`;
+	const entry = suggestions.get(key);
+	if (!entry) return undefined;
+	suggestions.delete(key);
+	if (Date.now() - entry.createdAt > PENDING_MODE_TTL_MS) return undefined;
+	return entry.persona === "normal" || entry.persona === "brute" ? entry.persona : undefined;
+}
+
+function clearPersonaSuggestions(parentId: string): void {
+	const suggestions = personaSuggestions();
+	if (!suggestions) return;
+	const prefix = `${parentId}:`;
+	for (const key of suggestions.keys()) {
+		if (key.startsWith(prefix)) suggestions.delete(key);
+	}
+}
+
 const MODE_HEADER = /(?:^|\n)\s*#?\s*(?:mode|persona):\s*(normal|orchestrate|brute)\b/i;
 
 function getRegistry(): Registry {
@@ -234,7 +274,8 @@ function takePendingMode(ctx: ExtensionContext): PendingMode | undefined {
 	return matched.entry;
 }
 
-function requestedTaskMode(task: Record<string, unknown>): SessionMode {
+/** The persona the parent named for this task, or undefined when it named none. */
+function explicitTaskMode(task: Record<string, unknown>): SessionMode | undefined {
 	const explicit = task.mode;
 	if (explicit === "normal" || explicit === "orchestrate" || explicit === "brute") return explicit;
 	for (const value of [task.task, task.context]) {
@@ -248,7 +289,7 @@ function requestedTaskMode(task: Record<string, unknown>): SessionMode {
 		if (tag === "brute" || tag === "normal") return tag;
 	}
 	if (task.agent === "orchestrator") return "orchestrate";
-	return "normal";
+	return undefined;
 }
 
 function taskItems(input: Record<string, unknown>): unknown[] {
@@ -481,7 +522,8 @@ export default function sessionPersona(pi: ExtensionAPI): void {
 		for (const [index, item] of taskItems(input).entries()) {
 			if (!item || typeof item !== "object") continue;
 			const task = item as Record<string, unknown>;
-			let mode = requestedTaskMode(task);
+			const explicit = explicitTaskMode(task);
+			let mode = explicit ?? "normal";
 			const requestsOrchestrator = mode === "orchestrate" || task.agent === "orchestrator";
 			if (requestsOrchestrator && !canDispatch) {
 				mode = "normal";
@@ -498,6 +540,7 @@ export default function sessionPersona(pi: ExtensionAPI): void {
 				parentAgentId: parentId,
 				workerName,
 				mode,
+				explicit: explicit !== undefined,
 				createdAt: timestamp,
 			});
 		}
@@ -507,12 +550,18 @@ export default function sessionPersona(pi: ExtensionAPI): void {
 		const id = sessionId(ctx);
 		getRegistry().mode.delete(id);
 		clearPendingModes(getRegistry(), ctx.agent.id);
+		clearPersonaSuggestions(ctx.agent.id);
 	});
 
 	pi.on("before_agent_start", (event, ctx) => {
 		const subagent = ctx.agent.kind === "sub";
 		const pending = subagent ? takePendingMode(ctx) : undefined;
-		const mode = subagent ? pending?.mode ?? getMode(sessionId(ctx)) : getMode(sessionId(ctx));
+		const suggested = subagent ? takePersonaSuggestion(ctx) : undefined;
+		const mode = !subagent
+			? getMode(sessionId(ctx))
+			: pending?.explicit
+				? pending.mode
+				: suggested ?? pending?.mode ?? getMode(sessionId(ctx));
 		if (mode === "normal") {
 			setMode(sessionId(ctx), "normal");
 			return;

@@ -302,6 +302,35 @@ describe("session persona modes", () => {
 		expect(result?.systemPrompt?.join("\n")).toContain("Execute the user's asked action");
 	});
 
+	test("applies a router suggestion only when the parent named no persona", () => {
+		const hooks = registerExtension();
+		const suggestions = new Map<string, { persona: string; createdAt: number }>();
+		(globalThis as unknown as Record<symbol, unknown>)[Symbol.for("omp.persona-suggestions.v1")] = suggestions;
+		const parent = context("suggest-parent", "main");
+		dispatch(hooks, parent, {
+			tasks: [
+				{ name: "suggest-plain", task: "Rename foo to bar in a.ts" },
+				{ name: "suggest-explicit", task: "# Mode: normal\nRename foo to bar in b.ts" },
+				{ name: "suggest-orchestrate", task: "Rename foo to bar in c.ts" },
+			],
+		});
+		const now = Date.now();
+		suggestions.set("suggest-parent:suggest-plain-agent", { persona: "brute", createdAt: now });
+		suggestions.set("suggest-parent:suggest-explicit-agent", { persona: "brute", createdAt: now });
+		suggestions.set("suggest-parent:suggest-orchestrate-agent", { persona: "orchestrate", createdAt: now });
+
+		const start = (name: string) => {
+			const child = context(`${name}-session`, name, {
+				agent: { kind: "sub", id: `${name}-agent`, name: "task", depth: 1, parentId: "suggest-parent" },
+			});
+			hooks.get("before_agent_start")?.({ systemPrompt: [subagentPrompt, normalPrompt()] }, child);
+			return registry().getMode(`${name}-session`);
+		};
+		expect(start("suggest-plain")).toBe("brute");
+		expect(start("suggest-explicit")).toBe("normal");
+		expect(start("suggest-orchestrate")).toBe("normal");
+		expect(suggestions.size).toBe(0);
+	});
 
 	test("matches pending modes to the parent and leaves ambiguous children unattached", () => {
 		const hooks = registerExtension();

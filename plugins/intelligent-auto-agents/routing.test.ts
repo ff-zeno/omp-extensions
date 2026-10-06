@@ -67,9 +67,9 @@ function report(provider: string, used: number, fetchedAt = Date.now()): Record<
 	return { provider, fetchedAt, limits: [window(`${provider}:5h`, 5 * 60 * 60 * 1000, true), window(`${provider}:weekly`, weekly, true)] };
 }
 
-describe("catalog v7", () => {
+describe("catalog v8", () => {
 	test("parses the shipped catalog and its routing surface", () => {
-		expect(catalog.version).toBe(7);
+		expect(catalog.version).toBe(8);
 		expect(Object.keys(catalog.pools)).toEqual(["mechanical", "grunt", "plan-review"]);
 		expect(Object.keys(catalog.taskTypes).sort()).toEqual([
 			"frontier-review",
@@ -387,6 +387,7 @@ describe("Jev classification", () => {
 			"state",
 			slots,
 			true,
+			false,
 			catalog,
 			evaluateFrom({ route: choice("lead", ["grunt", "lead"]), difficulty: score(2) }),
 		);
@@ -398,6 +399,7 @@ describe("Jev classification", () => {
 			"state",
 			slots,
 			true,
+			false,
 			catalog,
 			evaluateFrom({ route: choice("lead", ["grunt", "lead"], 0.2), difficulty: score(2) }),
 		);
@@ -409,6 +411,7 @@ describe("Jev classification", () => {
 			"state",
 			slots,
 			true,
+			false,
 			catalog,
 			evaluateFrom({ route: choice("lead", ["grunt", "lead"]), difficulty: score(2, 0.4) }),
 		);
@@ -417,13 +420,13 @@ describe("Jev classification", () => {
 	});
 
 	test("falls back to the baseline when only an uncertain difficulty was asked", async () => {
-		const decision = await choose("state", [], true, catalog, evaluateFrom({ difficulty: score(2, 0.4) }));
+		const decision = await choose("state", [], true, false, catalog, evaluateFrom({ difficulty: score(2, 0.4) }));
 		expect(decision).toMatchObject({ source: "baseline", reason: "uncertain-difficulty" });
 	});
 
 	test("sends the catalog's Jev instructions for both questions", async () => {
 		const requests: Array<Parameters<Evaluate>[0]> = [];
-		await choose("state", slots, true, catalog, async request => {
+		await choose("state", slots, true, false, catalog, async request => {
 			requests.push(request);
 			return { answers: { route: choice("lead", ["grunt", "lead"]), difficulty: score(2) } };
 		});
@@ -432,7 +435,7 @@ describe("Jev classification", () => {
 	});
 
 	test("returns a baseline when there is nothing to classify", async () => {
-		expect(await choose("state", [], false, catalog, evaluateFrom({}))).toMatchObject({
+		expect(await choose("state", [], false, false, catalog, evaluateFrom({}))).toMatchObject({
 			source: "baseline",
 			reason: "nothing-to-classify",
 		});
@@ -441,7 +444,62 @@ describe("Jev classification", () => {
 	test("rethrows caller cancellation", async () => {
 		const controller = new AbortController();
 		controller.abort();
-		await expect(choose("state", slots, true, catalog, evaluateFrom({}), controller.signal)).rejects.toThrow();
+		await expect(choose("state", slots, true, false, catalog, evaluateFrom({}), controller.signal)).rejects.toThrow();
+	});
+
+	test("suggests a confident persona in the same call, even on a baseline decision", async () => {
+		const requests: Array<Parameters<Evaluate>[0]> = [];
+		const decision = await choose("state", slots, true, true, catalog, async request => {
+			requests.push(request);
+			return {
+				answers: {
+					route: choice("lead", ["grunt", "lead"], 0.2),
+					difficulty: score(0),
+					persona: choice("brute", ["normal", "brute"]),
+				},
+			};
+		});
+		expect(requests).toHaveLength(1);
+		expect(requests[0].questions.persona?.instructions).toBe(catalog.personas.instructions);
+		expect(Object.keys(requests[0].questions.persona?.criteria ?? {})).toEqual(["normal", "brute"]);
+		expect(decision).toMatchObject({ source: "baseline", reason: "uncertain-choice", persona: "brute" });
+	});
+
+	test("drops an uncertain or malformed persona without failing the route", async () => {
+		const uncertain = await choose(
+			"state",
+			slots,
+			true,
+			true,
+			catalog,
+			evaluateFrom({
+				route: choice("grunt", ["grunt", "lead"]),
+				difficulty: score(1),
+				persona: choice("brute", ["normal", "brute"], 0.3),
+			}),
+		);
+		expect(uncertain).toMatchObject({ source: "jev", choice: "grunt" });
+		expect(uncertain.persona).toBeUndefined();
+		const orchestrate = await choose(
+			"state",
+			slots,
+			true,
+			true,
+			catalog,
+			evaluateFrom({
+				route: choice("grunt", ["grunt", "lead"]),
+				difficulty: score(1),
+				persona: choice("orchestrate", ["normal", "orchestrate"]),
+			}),
+		);
+		expect(orchestrate).toMatchObject({ source: "jev", choice: "grunt" });
+		expect(orchestrate.persona).toBeUndefined();
+	});
+
+	test("rejects persona agents outside the covered list", () => {
+		const bad = structuredClone(catalogData) as Record<string, any>;
+		bad.personas.agents = ["orchestrator"];
+		expect(() => parseCatalog(bad)).toThrow('personas names agent "orchestrator"');
 	});
 
 	test("sends the catalog's planning readiness instructions and routes", async () => {

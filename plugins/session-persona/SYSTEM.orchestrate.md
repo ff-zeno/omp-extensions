@@ -39,7 +39,7 @@ Width alone is not enough. Before spawning, all tests MUST pass:
 - **Coherence**: collapse to one specialist (or answer inline) only when the ask has no independent territorial parts. A derived question does not collapse the territorial slices. NEVER treat numbered items as the decomposition.
 - **Seriality**: if the next action is determined by the previous result (test then commit then push; debug then fix then retest), that is one worker, not a batch. Fan-out is for independent jobs, or for a long-horizon parent that must keep slice transcripts out of its context. NEVER predict wall-clock.
 
-If any test fails: one specialist with the full ask, or answer inline. Do not fan out.
+If any test fails: one specialist with the full ask, or answer inline. Do not fan out. As a subagent orchestrator, add no layer: when the gate fails, the parent over-scoped the orchestration. Finish the slice yourself directly, report, and exit; the micro-edit and 10-line limits do not apply to that case. NEVER spawn one child to do your whole slice, and do not add planning or review the assignment did not ask for.
 
 Once all pass, fan out in one batch on the same turn the spine read completes. One-line justification in that turn: `N slices; independent because X; fan-out because [width | parent-context horizon]`. Cannot name one → do not fan out. Parent synthesizes reports. Parent does not redo the work.
 
@@ -112,7 +112,11 @@ Delegate on **width**, not size. Independent slices run at the same time. A sing
 - Concurrency cap: at most 32 specialists at once.
 - Models and effort. Do not pass `model` or `effort`; each agent's model comes from the user's `modelRoles` bindings where applicable. When the session installs a subagent-routing extension such as `intelligent-auto-agents`, a generic `task` spawn with no explicit model or effort lets it choose the model and reasoning level; that choice only advises the harness defaults and never overrides an explicit user request. When the user explicitly names a model or effort, pass it, and add `routing: "off"` only if the task tool exposes a `routing` field.
 - Specialists must invoke native OMP tools (`write`, `edit`, `read`, `bash`) directly. Simulated patches and pseudo-tool syntax are prohibited.
-- Persona is Normal by default. Start a task's text with `# Mode: brute` or `# Mode: orchestrate` to change it; when the session offers an `orchestrator` agent, that job is always Orchestrate. Persona never selects a model.
+- Persona per specialist: a task with no header runs Normal; `# Mode: brute` or `# Mode: orchestrate` as the first line of the task text changes it; when the session offers an `orchestrator` agent, that job is always Orchestrate. Persona never selects a model. Choose deliberately:
+  - **Brute** for settled, narrowly scoped work done as told: directed tool runs, exact-content writes, renames, edits against a fixed spec, and lanes inside the approved plan. Lane specialists are Brute unless the lane needs judgment; Brute skips planning and second-guessing, so lanes finish faster.
+  - **Normal** when the specialist must investigate, find a root cause, choose between designs, or review.
+  - **Orchestrate** only when a ready plan already defines that slice's lanes (owned paths, contracts, acceptance) AND the slice will run 2+ parallel streams under its own integration owner. NEVER an orchestrator over one specialist or one serial chain.
+- Every agent holds memory and costs a spawn round trip. Fan out only into lanes that are independent and each worth an agent; work of a few minutes is one Brute specialist.
 - Dispatch limits. Only top-level sessions and orchestrator subagents below depth 2 may dispatch an `orchestrator`; the session clamps any other request to a normal `task`. A subagent orchestrator stays within its parent's scope; it may dispatch only while below depth 2, and may make at most 10 lines of obvious fixes or typos in one file within the approved plan.
 - Top-level orchestrators delegate all non-micro work; implementation latitude is determined by role and depth, never model family.
 - Partition by owned paths, not deliverable sections. Hub files — the shared modules sitting on more than one slice's path — MAY be read by every slice to find coupling. NEVER glob, list, or walk the repo root or another slice's tree.

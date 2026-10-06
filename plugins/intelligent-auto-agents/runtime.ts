@@ -13,6 +13,7 @@ import {
 	choose,
 	type Decision,
 	type Difficulty,
+	DIFFICULTY_NAMES,
 	effortForModel,
 	type Effort,
 	type EffortRange,
@@ -24,6 +25,7 @@ import {
 	ORDINARY,
 	parseCatalog,
 	parseDirective,
+	type Persona,
 	type PlanProvenance,
 	planProvenance,
 	type PoolMember,
@@ -38,6 +40,34 @@ import {
 
 const catalog = parseCatalog(catalogData);
 const STATE_ENTRY = "intelligent-auto-agents-state";
+/**
+ * Persona suggestions shared with the session-persona plugin through a process-wide registry keyed
+ * `<parent agent id>:<child agent id>`. That plugin applies one only when the parent named no persona
+ * and deletes it when the child starts; unclaimed entries expire.
+ */
+const PERSONA_SUGGESTIONS = Symbol.for("omp.persona-suggestions.v1");
+const PERSONA_SUGGESTION_TTL_MS = 60_000;
+type PersonaSuggestion = { persona: Persona; createdAt: number };
+
+function suggestPersona(parentId: string, childId: string, persona: Persona): void {
+	const store = globalThis as typeof globalThis & { [PERSONA_SUGGESTIONS]?: Map<string, PersonaSuggestion> };
+	const suggestions = (store[PERSONA_SUGGESTIONS] ??= new Map());
+	const now = Date.now();
+	for (const [key, entry] of suggestions) {
+		if (now - entry.createdAt > PERSONA_SUGGESTION_TTL_MS) suggestions.delete(key);
+	}
+	suggestions.set(`${parentId}:${childId}`, { persona, createdAt: now });
+}
+
+/** Jev's persona under the catalog ceiling: brute needs a rated difficulty no higher than `maxDifficulty`. */
+function cappedPersona(decision: Decision): Persona | undefined {
+	if (decision.persona !== "brute") return decision.persona;
+	if (decision.difficulty === undefined) return "normal";
+	return DIFFICULTY_NAMES.indexOf(decision.difficulty) <= DIFFICULTY_NAMES.indexOf(catalog.personas.maxDifficulty)
+		? "brute"
+		: "normal";
+}
+
 type PoolReservation = {
 	token: string;
 	agent: string;
@@ -604,6 +634,8 @@ export function register(pi: ExtensionAPI): void {
 			backups?: Array<{ slot: string; model: string; thinking: string }>;
 			rollover?: { from: string; to: string };
 			pool?: PoolRouteReport;
+			/** Persona handed to session-persona after the catalog ceiling; overrides Jev's raw pick. */
+			persona?: Persona;
 		},
 		latencyMs: number,
 	): string {
@@ -619,6 +651,8 @@ export function register(pi: ExtensionAPI): void {
 		});
 		const latency = `${latencyMs}ms`;
 		const usage = formatUsage(decision.usage);
+		// A suggestion only: an explicit parent persona still wins in session-persona.
+		const persona = route.persona === "brute" ? " · suggests brute persona" : "";
 		if (decision.source !== "baseline") {
 			const slot = route.slot ?? decision.choice;
 			const target = route.model || route.thinking ? ` · ${route.model ?? "bound model"}:${route.thinking ?? "default"}` : "";
@@ -634,11 +668,11 @@ export function register(pi: ExtensionAPI): void {
 					: route.pool?.active
 						? ` · pool ${route.pool.active}`
 						: "";
-			lastLine = `${routingLabel(ctx)}: ${agent}: ${slot ?? "effort"}${target}${difficulty}${confidence}${source}${backup}${rollover}${pool} · ${latency}${usage}`;
+			lastLine = `${routingLabel(ctx)}: ${agent}: ${slot ?? "effort"}${target}${difficulty}${confidence}${source}${backup}${rollover}${pool}${persona} · ${latency}${usage}`;
 			return lastLine;
 		}
 		const reason = decision.reason.replaceAll("-", " ");
-		lastLine = `${routingLabel(ctx)}: fallback · ${reason} · baseline kept · ${latency}${usage}`;
+		lastLine = `${routingLabel(ctx)}: fallback · ${reason} · baseline kept${persona} · ${latency}${usage}`;
 		setActivity(ctx, lastLine);
 		return lastLine;
 	}
@@ -758,7 +792,7 @@ export function register(pi: ExtensionAPI): void {
 				return;
 			}
 			const { result: decision, latencyMs } = await withJevActivity(ctx, `rating ${event.agent} difficulty`, () =>
-				choose(state, [], true, catalog, evaluator(ctx), event.signal),
+				choose(state, [], true, false, catalog, evaluator(ctx), event.signal),
 			);
 			const merged = withReadiness(decision);
 			const difficulty = merged.difficulty ?? ORDINARY;
@@ -819,23 +853,31 @@ export function register(pi: ExtensionAPI): void {
 			: taskTypeName !== undefined
 				? taskTypeEffortVaries(catalog, taskTypeName)
 				: candidates.some(name => taskTypeEffortVaries(catalog, name));
-		if (offered.length > 1 || rateDifficulty) {
+		// The child's agent id is the spawn key for task and workpool spawns; without one the child cannot claim a suggestion.
+		const personaKey =
+			ctx.agent.id !== undefined && event.spawnKey !== undefined && catalog.personas.agents.includes(event.agent)
+				? { parent: ctx.agent.id, child: event.spawnKey }
+				: undefined;
+		if (offered.length > 1 || rateDifficulty || personaKey) {
 			({ result: decision, latencyMs } = await withJevActivity(
 				ctx,
 				offered.length > 1 ? `classifying ${event.agent} task type` : `rating ${event.agent} difficulty`,
-				() => choose(state, offered, rateDifficulty, catalog, evaluator(ctx), event.signal),
+				() => choose(state, offered, rateDifficulty, personaKey !== undefined, catalog, evaluator(ctx), event.signal),
 			));
 		}
 		decision = withReadiness(decision);
+		const persona = personaKey ? cappedPersona(decision) : undefined;
+		if (personaKey && persona) suggestPersona(personaKey.parent, personaKey.child, persona);
+		const personaRoute = persona ? { persona } : {};
 		if (needsTaskChoice && candidates.length > 1) {
 			if (decision.source === "baseline") {
-				reportDecision(ctx, decision, event.agent, {}, latencyMs);
+				reportDecision(ctx, decision, event.agent, personaRoute, latencyMs);
 				return;
 			}
 			taskTypeName = decision.choice;
 		}
 		if (taskTypeName === undefined && directiveModel === undefined) {
-			reportDecision(ctx, decision, event.agent, {}, latencyMs);
+			reportDecision(ctx, decision, event.agent, personaRoute, latencyMs);
 			return;
 		}
 		const difficulty = decision.difficulty ?? ORDINARY;
@@ -926,7 +968,7 @@ export function register(pi: ExtensionAPI): void {
 			}
 		}
 		if (!attempts.length) {
-			reportDecision(ctx, decision, event.agent, {}, latencyMs);
+			reportDecision(ctx, decision, event.agent, personaRoute, latencyMs);
 			return;
 		}
 		const firstUnblocked = selectorSuppressed(ctx, attempts[0].model, attempts[0].effort)
@@ -961,6 +1003,7 @@ export function register(pi: ExtensionAPI): void {
 						...(directive ? { directive: directive.span } : {}),
 						...(poolRoute ? { pool: poolRoute } : {}),
 						...(rolledOver ? { rollover: { from: attempts[0].exact, to: active.slot } } : {}),
+						...personaRoute,
 					},
 					latencyMs,
 				) + planNote,

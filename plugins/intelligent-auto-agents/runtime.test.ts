@@ -18,6 +18,7 @@ let routeConfidence = 0.98;
 let difficultyScore = 1;
 let difficultyConfidence = 0.9;
 let judgeCalls = 0;
+let personaChoice = "normal";
 const judgeRequests: JudgeRequest[] = [];
 const judgeBridge = globalThis as unknown as { __intelligentAutoAgentsJudge?: (request: JudgeRequest) => Promise<unknown> };
 judgeBridge.__intelligentAutoAgentsJudge = async (request: JudgeRequest) => {
@@ -41,6 +42,14 @@ judgeBridge.__intelligentAutoAgentsJudge = async (request: JudgeRequest) => {
 	}
 	if (request.questions.difficulty) {
 		answers.difficulty = { type: "score", score: difficultyScore, confidence: difficultyConfidence, probabilities: {} };
+	}
+	if (request.questions.persona) {
+		answers.persona = {
+			type: "choice",
+			choice: personaChoice,
+			confidence: 0.9,
+			probabilities: { normal: personaChoice === "normal" ? 1 : 0, brute: personaChoice === "brute" ? 1 : 0 },
+		};
 	}
 	return { answers, usage: { input: 20, output: 0, totalTokens: 20, cost: { total: 0.0004 } } };
 };
@@ -109,7 +118,7 @@ function createFixture(
 	options: {
 		enabled?: boolean;
 		bindings?: Record<string, RoutingTestModel>;
-		agent?: { kind: "main" | "sub"; name: string; depth: number };
+		agent?: { kind: "main" | "sub"; id?: string; name: string; depth: number };
 		model?: RoutingTestModel;
 		sessionId?: string;
 		suppressedSelectors?: readonly string[];
@@ -208,6 +217,7 @@ function reset(): void {
 	difficultyScore = 1;
 	difficultyConfidence = 0.9;
 	judgeCalls = 0;
+	personaChoice = "normal";
 	judgeRequests.length = 0;
 	resetSpeedPoolStateForTests();
 }
@@ -228,6 +238,50 @@ function usageReport(provider: string, modelId: string, fetchedAt = Date.now(), 
 		return { provider, fetchedAt, limits: [limit("xai-oauth:credits:weekly", weeklyDuration, used, 0.2), limit("xai-oauth:credits:monthly", 30 * 24 * 60 * 60 * 1000, used, 0.2)] };
 	return { provider, fetchedAt, limits: [limit(`${provider}:${modelId}:5h`, shortDuration, used, 0.2), limit(`${provider}:${modelId}:weekly`, weeklyDuration, used, 0.2)] };
 }
+
+const personaRegistry = () =>
+	(globalThis as Record<symbol, Map<string, { persona: string }> | undefined>)[Symbol.for("omp.persona-suggestions.v1")];
+
+describe("persona suggestions", () => {
+	const main = { kind: "main" as const, id: "main", name: "main", depth: 0 };
+
+	test("hands a confident brute pick for exact work to session-persona under the child's key", async () => {
+		reset();
+		routeChoice = "grunt";
+		difficultyScore = 0;
+		personaChoice = "brute";
+		const fixture = createFixture({ agent: main, usageReports: [usageReport("xai-oauth", "grok-4.6")] });
+		const result = await spawn(fixture, { spawnKey: "Renamer" });
+		expect(judgeCalls).toBe(1);
+		expect(personaRegistry()?.get("main:Renamer")?.persona).toBe("brute");
+		expect(result.note).toContain("suggests brute persona");
+		expect(decisionData(fixture)).toMatchObject({ persona: "brute" });
+		personaRegistry()?.delete("main:Renamer");
+	});
+
+	test("caps brute to normal above the catalog's difficulty ceiling", async () => {
+		reset();
+		routeChoice = "grunt";
+		difficultyScore = 2;
+		personaChoice = "brute";
+		const fixture = createFixture({ agent: main, usageReports: [usageReport("xai-oauth", "grok-4.6")] });
+		const result = await spawn(fixture, { spawnKey: "Migrator" });
+		expect(personaRegistry()?.get("main:Migrator")?.persona).toBe("normal");
+		expect(result.note).not.toContain("persona");
+		personaRegistry()?.delete("main:Migrator");
+	});
+
+	test("asks no persona question for agents outside the catalog list or without a spawn key", async () => {
+		reset();
+		routeChoice = "grunt";
+		personaChoice = "brute";
+		const fixture = createFixture({ agent: main, usageReports: [usageReport("xai-oauth", "grok-4.6")] });
+		await spawn(fixture, { agent: "scout", spawnKey: "Looker" });
+		await spawn(fixture);
+		expect(judgeRequests.every(request => request.questions.persona === undefined)).toBe(true);
+		expect(personaRegistry()?.has("main:Looker") ?? false).toBe(false);
+	});
+});
 
 describe("intelligent auto-agents runtime", () => {
 	test("routes a covered agent through its task-type pool without persisting task text", async () => {

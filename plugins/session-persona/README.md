@@ -169,6 +169,12 @@ Task requests propagate a persona through the `mode` field, `# Mode:` or `# Pers
 
 Orchestrator dispatch is clamped when the current subagent is not orchestrate or its depth is already 2 or greater.
 
+The extension applies the persona a parent asks for; choosing it is prompt guidance, not code.
+When the parent names none, a router may suggest one through the `Symbol.for("omp.persona-suggestions.v1")` registry, keyed `<parent agent id>:<child agent id>`; the companion `intelligent-auto-agents` plugin does this.
+The child applies a suggested Normal or Brute and ignores a suggested Orchestrate; an explicit parent persona, including an explicit `# Mode: normal`, always wins.
+The bundled prompts tell parents to pick Brute for settled narrow work done as told (lane work under an orchestrator included), Normal for investigation, design choice, or review, and Orchestrate only when a ready plan defines the lanes and the slice runs two or more parallel streams.
+A subagent orchestrator whose slice does not split into independent lanes does the work itself rather than spawning a single child.
+
 The bundled orchestrate prompt is agent-agnostic: it tells the model to choose the job from the agents the session actually lists, and it names only stock agents (`task`, `scout`, `sonic`, `reviewer`, `security-reviewer`).
 It names specialised planning, git, design, and review agents generically, so they are used only when the session offers them.
 When a subagent-routing extension such as the companion `intelligent-auto-agents` plugin is installed, a generic `task` spawn with no explicit model or effort lets that extension choose the model and reasoning level.

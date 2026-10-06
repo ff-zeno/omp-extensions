@@ -6,7 +6,7 @@ Oh My Pi marketplace with three plugins.
 |---|---|---|
 | `throughput` | TPS sparkline, TTFB, and a tree of worker rows with model, gauge, and token counts. | Stock OMP 18.4.9 or newer |
 | `session-persona` | `/persona` or Ctrl+Alt+P cycles the session persona: normal, orchestrate, brute. `/persona <name>`, `/normal`, `/orchestrate`, and `/brute` set one directly. The hotkey is remappable. Subagents inherit a persona from `# Mode:` headers. | Stock OMP 18.4.9 or newer |
-| `intelligent-auto-agents` | Subagent router (catalog v7): picks a task type, applies a per-model difficulty-to-effort map, and ranks quota-gated pool members per spawn, with a `Directive:` override. Ships `review-frontier-1..3`, `design-master`, `design-second`, `orchestrator`, `plan`, and `git`. | OMP 18.6.1 built with the bundled core patch, and a TypeSafe API key (`/login typesafe`) |
+| `intelligent-auto-agents` | Subagent router (catalog v8): picks a task type, applies a per-model difficulty-to-effort map, ranks quota-gated pool members per spawn, and suggests a Normal or Brute persona when the parent names none, with a `Directive:` override. Ships `review-frontier-1..3`, `design-master`, `design-second`, `orchestrator`, `plan`, and `git`. | OMP 18.6.1 built with the bundled core patch, and a TypeSafe API key (`/login typesafe`) |
 
 Add the catalog, then install the plugins you want:
 

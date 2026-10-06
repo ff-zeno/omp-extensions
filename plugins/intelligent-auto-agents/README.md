@@ -1,8 +1,10 @@
 # Intelligent auto-agents
 
-This OMP extension routes eligible subagent spawns through Jev, a TypeSafe-backed classifier described by `catalog.json` (catalog v7).
+This OMP extension routes eligible subagent spawns through Jev, a TypeSafe-backed classifier described by `catalog.json` (catalog v8).
 
 Jev selects a task type, rates task difficulty against the catalog ladder, resolves the model's effort from its difficulty-to-effort map, ranks pool members by quota, and records routing metadata.
+
+When the parent names no persona, Jev also suggests one for the worker (Normal or Brute) in the same classifier call; see [Persona suggestions](#persona-suggestions).
 
 A brief can steer Jev with a `Directive: use <alias|model> [effort]` line. Precedence is spawn lock, then directive, then pool, then a fixed task-type model, then the agent's bound `modelRoles` selector.
 
@@ -239,11 +241,25 @@ Keep the catalog version and schema valid; the plugin refuses to load a catalog 
 
 `agents.covered` lists the agents routed through task types; `agents.pinned` lists the agents that keep their bound model and receive only effort. `directiveTargets` maps a `Directive:` alias to a role, and `blockedDirectiveTargets` lists case-insensitive substrings no directive target may contain.
 
+`personas` controls the persona suggestion: `agents` lists the agents Jev suggests a persona for, `instructions` and `criteria` (one description per persona, `normal` and `brute`) go to Jev verbatim, and `maxDifficulty` caps Brute: a worker rated harder than this level, or not rated at all, gets Normal.
+
 Each quota threshold that is set requires its window: a member without that window in its usage report is not eligible.
 `poolLimits` holds the shared guardrails: `demoteAt`, `skipAt`, the per-dispatch `burstPenalty`, `burstPenaltyWindow` (which quota window a provider's in-flight burst penalty counts against, keyed by provider with a required `*` default), `finalWindowMs`, usage timeout and maximum report age, clock-skew tolerance, and the failure streak and duration for demotion.
 Within `finalWindowMs` of a weekly reset, unused weekly quota would be lost, so the weekly pace check and weekly crowding are lifted and the short-window cap rises to `demoteAt`.
 In that stretch, in-flight burst penalties also count against the weekly window, and `skipAt` stops new work, so running tasks keep `1 - skipAt` of the quota to finish.
 Usage comes from the same provider reports as `/usage`. Antigravity is read through its Gemini counter, xAI through its aggregate credit pool, and Anthropic through its shared 5-hour and weekly windows. The plugin assumes `providers.antigravityEndpoint` is `auto`.
+
+## Persona suggestions
+
+Jev answers one extra question per spawn of an agent in `personas.agents`: should the worker run Normal or Brute.
+An answer below `minConfidence` is dropped, and Brute above `personas.maxDifficulty` becomes Normal.
+Jev never suggests Orchestrate; that needs a ready plan with parallel lanes, which one assignment cannot show.
+
+The suggestion goes into the `Symbol.for("omp.persona-suggestions.v1")` registry, a `Map` keyed by `<parent agent id>:<spawn key>` holding `{ persona, createdAt }`; entries expire after 60 seconds.
+For `task` spawns the spawn key is the child's agent id, so the child finds its entry as `<parentId>:<id>`.
+The companion `session-persona` plugin reads and removes the entry when the child starts, and applies it only when the parent gave no explicit persona.
+Without `session-persona`, the registry is written and ignored.
+The routing line shows `suggests brute persona` when Jev suggested Brute, and the decision record carries `persona` and `personaConfidence`.
 
 ## Development
 

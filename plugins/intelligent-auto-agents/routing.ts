@@ -20,6 +20,9 @@ export const ORDINARY: Difficulty = "ordinary";
 export const WINDOW_KINDS = ["short", "weekly", "monthly"] as const;
 export type WindowKind = (typeof WINDOW_KINDS)[number];
 export type EffortRange = readonly [Effort, Effort];
+/** Personas Jev may suggest for a spawn, safest first. Orchestrate stays the parent's call. */
+export const PERSONAS = ["normal", "brute"] as const;
+export type Persona = (typeof PERSONAS)[number];
 
 export type ModelRef = { provider: string; id: string };
 
@@ -98,7 +101,7 @@ export type PoolLimits = {
 };
 
 export type Catalog = {
-	version: 7;
+	version: 8;
 	enabled: boolean;
 	timeoutMs: number;
 	maxInputBytes: number;
@@ -107,6 +110,13 @@ export type Catalog = {
 	/** Instructions Jev receives for the task-type question and the difficulty rating. */
 	jevInstructions: { route: string; difficulty: string };
 	planningReadiness: { agents: string[]; instructions: string; routes: Record<PlanningRoute, string> };
+	/** Persona suggestion: which agents get one, its difficulty ceiling, and Jev's criteria. */
+	personas: {
+		agents: string[];
+		maxDifficulty: Difficulty;
+		instructions: string;
+		criteria: Record<Persona, string>;
+	};
 	difficulty: Record<Difficulty, string>;
 	/** Judgment notes fed verbatim into Jev's prompt. */
 	nuances: string[];
@@ -145,6 +155,9 @@ export type Decision = {
 	/** Difficulty name when Jev rated it with enough confidence. */
 	difficulty?: Difficulty;
 	confidence?: number;
+	/** Persona Jev suggested with enough confidence, before the catalog's difficulty ceiling. */
+	persona?: Persona;
+	personaConfidence?: number;
 	reason: string;
 	usage?: UsageSummary;
 };
@@ -153,6 +166,7 @@ export type ChoiceRequest = {
 	questions: {
 		route?: { type: "choice"; instructions: string; criteria: Record<string, string> };
 		difficulty?: { type: "score"; instructions: string; criteria: string[] };
+		persona?: { type: "choice"; instructions: string; criteria: Record<string, string> };
 	};
 };
 export type Evaluate = (request: ChoiceRequest, signal: AbortSignal) => Promise<unknown>;
@@ -353,7 +367,7 @@ function assertModelSafeMap(
 export function parseCatalog(value: unknown): Catalog {
 	if (
 		!record(value) ||
-		value.version !== 7 ||
+		value.version !== 8 ||
 		typeof value.enabled !== "boolean" ||
 		!Number.isInteger(value.timeoutMs) ||
 		Number(value.timeoutMs) < 100 ||
@@ -373,6 +387,15 @@ export function parseCatalog(value: unknown): Catalog {
 		!record(value.planningReadiness.routes) ||
 		!text(value.planningReadiness.routes["autonomous-plan"]) ||
 		!text(value.planningReadiness.routes["discuss-with-user"]) ||
+		!record(value.personas) ||
+		!agentNames(value.personas.agents) ||
+		!unique(value.personas.agents) ||
+		!isDifficulty(value.personas.maxDifficulty) ||
+		!text(value.personas.instructions) ||
+		!record(value.personas.criteria) ||
+		Object.keys(value.personas.criteria).length !== PERSONAS.length ||
+		!text(value.personas.criteria.normal) ||
+		!text(value.personas.criteria.brute) ||
 		!record(value.difficulty) ||
 		!DIFFICULTY_NAMES.every(name => text(value.difficulty[name])) ||
 		!Array.isArray(value.nuances) ||
@@ -441,10 +464,15 @@ export function parseCatalog(value: unknown): Catalog {
 		directives[name] = target;
 	}
 
+	for (const name of value.personas.agents) {
+		if (!value.agents.covered.includes(name))
+			throw new Error(`Auto-agents personas names agent "${name}" that is not covered`);
+	}
+
 	assertModelSafeMap(value as Record<string, unknown>, pools, taskTypes, reviewOnly, value.blockedDirectiveTargets);
 
 	return {
-		version: 7,
+		version: 8,
 		enabled: value.enabled,
 		timeoutMs: Number(value.timeoutMs),
 		maxInputBytes: Number(value.maxInputBytes),
@@ -461,6 +489,12 @@ export function parseCatalog(value: unknown): Catalog {
 				"autonomous-plan": value.planningReadiness.routes["autonomous-plan"],
 				"discuss-with-user": value.planningReadiness.routes["discuss-with-user"],
 			},
+		},
+		personas: {
+			agents: value.personas.agents,
+			maxDifficulty: value.personas.maxDifficulty,
+			instructions: value.personas.instructions,
+			criteria: { normal: value.personas.criteria.normal, brute: value.personas.criteria.brute },
 		},
 		difficulty: {
 			exact: value.difficulty.exact,
@@ -972,20 +1006,22 @@ async function ask(
 }
 
 /**
- * Ask Jev to classify one routed spawn: choose a task type when several compete, then rate
- * difficulty. Caller cancellation rethrows; every other failure returns a baseline decision.
+ * Ask Jev to classify one routed spawn in a single call: choose a task type when several compete,
+ * rate difficulty, and suggest a persona when asked. An invalid or uncertain persona answer only
+ * drops the suggestion. Caller cancellation rethrows; every other failure returns a baseline decision.
  */
 export async function choose(
 	state: string,
 	slots: readonly Slot[],
 	rateDifficulty: boolean,
+	suggestPersona: boolean,
 	catalog: Catalog,
 	evaluate: Evaluate,
 	signal?: AbortSignal,
 ): Promise<Decision> {
 	signal?.throwIfAborted();
 	const routeSlots = slots.length > 1;
-	if (!routeSlots && !rateDifficulty) return { source: "baseline", reason: "nothing-to-classify" };
+	if (!routeSlots && !rateDifficulty && !suggestPersona) return { source: "baseline", reason: "nothing-to-classify" };
 	const questions: ChoiceRequest["questions"] = {};
 	if (routeSlots) {
 		questions.route = {
@@ -1001,10 +1037,24 @@ export async function choose(
 			criteria: DIFFICULTY_NAMES.map(name => `${name}: ${catalog.difficulty[name]}`),
 		};
 	}
+	if (suggestPersona) {
+		questions.persona = {
+			type: "choice",
+			instructions: catalog.personas.instructions,
+			criteria: Object.fromEntries(PERSONAS.map(name => [name, catalog.personas.criteria[name]])),
+		};
+	}
 	const request: ChoiceRequest = { state, questions };
 	try {
 		const { answers, usage } = await ask(request, catalog, evaluate, signal);
-		const withUsage = usage ? { usage } : {};
+		const persona = suggestPersona ? choiceAnswer(answers.persona, PERSONAS) : undefined;
+		// Usage and a confident persona ride along on every decision, baseline included.
+		const extras = {
+			...(persona && persona.confidence >= catalog.minConfidence
+				? { persona: persona.choice as Persona, personaConfidence: persona.confidence }
+				: {}),
+			...(usage ? { usage } : {}),
+		};
 		let choice: string | undefined;
 		let confidence: number | undefined;
 		if (routeSlots) {
@@ -1019,7 +1069,7 @@ export async function choose(
 					leading: route.choice,
 					confidence: route.confidence,
 					reason: "uncertain-choice",
-					...withUsage,
+					...extras,
 				};
 			}
 			choice = route.choice;
@@ -1032,7 +1082,7 @@ export async function choose(
 			if (!rated) throw new InvalidResponseError();
 			// A confident task-type choice survives an uncertain rating; the caller uses ordinary difficulty.
 			if (choice === undefined)
-				return { source: "baseline", confidence: rated.confidence, reason: "uncertain-difficulty", ...withUsage };
+				return { source: "baseline", confidence: rated.confidence, reason: "uncertain-difficulty", ...extras };
 		}
 		return {
 			source: "jev",
@@ -1040,7 +1090,7 @@ export async function choose(
 			...(difficulty !== undefined ? { difficulty } : {}),
 			...(confidence !== undefined ? { confidence } : {}),
 			reason: uncertainDifficulty ? "uncertain-difficulty" : "classified",
-			...withUsage,
+			...extras,
 		};
 	} catch (error) {
 		signal?.throwIfAborted();

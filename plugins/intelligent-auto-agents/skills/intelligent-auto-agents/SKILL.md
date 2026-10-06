@@ -5,7 +5,7 @@ description: Use when delegating OMP work with intelligent auto-agents enabled, 
 
 # Intelligent auto-agents
 
-Jev is the router described by `catalog.json` (catalog v7). Before each covered or pinned subagent spawn it selects a task type, rates difficulty, and resolves a concrete model and effort.
+Jev is the router described by `catalog.json` (catalog v8). Before each covered or pinned subagent spawn it selects a task type, rates difficulty, and resolves a concrete model and effort.
 
 ## Terms
 
@@ -31,7 +31,8 @@ Jev is the router described by `catalog.json` (catalog v7). Before each covered 
 |---|---|
 | Inline work, one worker, multiple workers, or an orchestrator | Parent |
 | Job selected in `agent` | Parent |
-| Persona selected by `# Mode: brute` or `# Mode: orchestrate` | Parent |
+| Persona selected by `# Mode: brute` or `# Mode: orchestrate`: Brute for settled narrow work done as told, Normal for investigation, design choice, or review, Orchestrate only with a ready plan whose lanes run 2+ parallel streams | Parent |
+| Persona when the parent named none: Normal or Brute for `task`, `sonic`, and `git` workers, never Orchestrate; Normal when Jev is unsure or unavailable | Jev, from `catalog.json` `personas` |
 | Recipe | Parent |
 | Task type, difficulty, pool order, model role, and effort | Jev, from `catalog.json` |
 | Concrete model and effort validation | OMP, from `modelRoles` |
@@ -61,7 +62,8 @@ Highest wins:
 
 Choose one recipe only when its trigger holds.
 
-- **single-worker** uses one worker for a bounded task with a settled specification.
+- **single-worker** uses one worker for a bounded task with a settled specification, in the Brute persona when the work is done as told.
+- **orchestrated-lanes** uses one `orchestrator` per slice only when a ready plan already defines independent lanes and that slice runs two or more of them in parallel; its lane workers run Brute unless a lane needs judgment. Never an orchestrator over one worker.
 - **plan-then-implement** uses `plan` to write the plan (its `plan:` front matter names the authored-by models), then a stock `reviewer` on the `plan-review` task type — never on the plan's author model — then the implementation workers selected by the parent.
 - **dual-design** uses `design-master` (`@lead`) and `design-second` (`@frontier-2`) in parallel when the user requests design alternatives or a second opinion.
 - **plan-review** uses one stock `reviewer` per non-author frontier model (`@frontier-1`, `@frontier-2`, `@frontier-3`) when the user requests full frontier plan review.

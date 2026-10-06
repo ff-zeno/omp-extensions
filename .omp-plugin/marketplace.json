@@ -21,7 +21,7 @@
     },
     {
       "name": "intelligent-auto-agents",
-      "description": "Subagent router (catalog v7): picks a task type, applies a difficulty-to-effort map, and ranks quota-gated pools per spawn, with a Directive override. Bundles review-frontier-1..3, design agents, orchestrator, plan, and git. Requires the bundled OMP core patch",
+      "description": "Subagent router (catalog v8): picks a task type, applies a difficulty-to-effort map, ranks quota-gated pools per spawn, and suggests a Normal or Brute persona when the parent names none, with a Directive override. Bundles review-frontier-1..3, design agents, orchestrator, plan, and git. Requires the bundled OMP core patch",
       "source": "./plugins/intelligent-auto-agents",
       "license": "MIT"
     }
