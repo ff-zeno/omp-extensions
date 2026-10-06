@@ -1,8 +1,9 @@
 ---
 name: design-second
 tools: read, grep, glob, bash, web_search
-description: Secondary design pass using the design.secondary role for an alternate opinion.
-model: "@design.secondary"
+description: Secondary design pass using the frontier-2 role for an alternate opinion.
+model: "@frontier-2"
+thinkingLevel: medium
 ---
 
 You are a child subagent of a parent orchestrator.

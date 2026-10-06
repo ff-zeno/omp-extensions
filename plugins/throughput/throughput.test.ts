@@ -17,6 +17,8 @@ import {
 	truncateTerminalLine,
 	terminalDisplayWidth,
 	resolveMessageTokens,
+	SPINNER_ADVANCE_MS,
+	statusSpinnerFrame,
 	type SessionThroughput,
 	type TokenProgress,
 	type ThroughputRegistry,
@@ -409,6 +411,8 @@ describe("Throughput hierarchy and persona dispatch", () => {
 				getHeader: () => ({}),
 			},
 			model: { id: "test/model" },
+			setInterval: () => 0,
+			clearTimer: () => {},
 			ui: {
 				theme: { fg: (_color: string, value: string) => value },
 				setWidget: (_name: string, lines: unknown) => {
@@ -475,6 +479,8 @@ describe("Throughput hierarchy and persona dispatch", () => {
 				getHeader: () => ({}),
 			},
 			model: { id: "test/model" },
+			setInterval: () => 0,
+			clearTimer: () => {},
 			ui: {
 				theme: { fg: (_color: string, value: string) => value },
 				setWidget: (_name: string, lines: unknown) => {
@@ -496,7 +502,7 @@ describe("Throughput hierarchy and persona dispatch", () => {
 			kind: "main", id: "registry-columns-parent", name: "main", depth: 0,
 		});
 		const workerContext = makeContext("columns-worker", "W1ReviewFrontierSecondPass", {
-			kind: "sub", id: "registry-columns-worker", name: "peer-review-frontier-2", depth: 1,
+			kind: "sub", id: "registry-columns-worker", name: "review-frontier-2", depth: 1,
 			parentId: "registry-columns-parent",
 		});
 		const parentHandlers = createPi();
@@ -510,7 +516,7 @@ describe("Throughput hierarchy and persona dispatch", () => {
 				Object.defineProperty(stdout, "columns", { configurable: true, value: cols });
 				parentHandlers.get("session_start")?.({}, parentContext);
 				const row = widgets.at(-1)?.find((line) => line.includes("W1Review"));
-				expect(row).toContain("peer-review-2");
+				expect(row).toContain("review-2");
 				expect(row).toMatch(/W1Review\S*…/);
 				expect(terminalDisplayWidth(row ?? "")).toBeLessThanOrEqual(cols);
 			}
@@ -550,6 +556,8 @@ describe("Throughput hierarchy and persona dispatch", () => {
 				},
 			},
 			model: { id: "test/model" },
+			setInterval: () => 0,
+			clearTimer: () => {},
 			ui: {
 				theme: { fg: (_color: string, value: string) => value },
 				setWidget: (_name: string, lines: unknown) => {
@@ -707,4 +715,144 @@ describe("Throughput hierarchy and persona dispatch", () => {
 		}
 	});
 
+});
+
+describe("Throughput UI timer lifecycle", () => {
+	test("arms through the extension context and clears the prior timer across session switches", () => {
+		const global = globalThis as Record<symbol, unknown>;
+		const registryKey = Symbol.for("omp.throughput.registry.v4");
+		const previousRegistry = global[registryKey];
+		delete global[registryKey];
+		const intervals: number[] = [];
+		const cleared: number[] = [];
+		let nextTimer = 1;
+		const makeContext = (sessionId: string, name: string, agent: ExtensionContext["agent"]) => ({
+			agent,
+			sessionManager: {
+				getSessionId: () => sessionId,
+				getSessionName: () => name,
+				getSessionFile: () => `/sessions/${sessionId}.jsonl`,
+				getHeader: () => ({}),
+			},
+			model: { id: "test/model" },
+			setInterval: () => {
+				const id = nextTimer++;
+				intervals.push(id);
+				return id;
+			},
+			clearTimer: (timer: number) => {
+				cleared.push(timer);
+			},
+			ui: {
+				theme: { fg: (_color: string, value: string) => value },
+				setWidget: () => {},
+			},
+		});
+		// One instance shared across sessions mirrors a host that reuses the runner.
+		const handlers = new Map<string, (event: unknown, ctx: unknown) => void>();
+		throughput({
+			on: (event: string, handler: unknown) => {
+				handlers.set(event, handler as (event: unknown, ctx: unknown) => void);
+			},
+			getThinkingLevel: () => "low",
+		} as unknown as Parameters<typeof throughput>[0]);
+		const mainContext = makeContext("timer-main", "main", {
+			kind: "main", id: "registry-timer-main", name: "main", depth: 0,
+		});
+		const workerContext = makeContext("timer-worker", "worker", {
+			kind: "sub", id: "registry-timer-worker", name: "task", depth: 1, parentId: "registry-timer-main",
+		});
+		try {
+			handlers.get("session_start")?.({}, mainContext);
+			expect(intervals).toEqual([1]);
+			expect(cleared).toEqual([]);
+
+			// A worker session does not arm or clear the main timer.
+			handlers.get("session_start")?.({}, workerContext);
+			expect(intervals).toEqual([1]);
+			expect(cleared).toEqual([]);
+
+			// Returning to the main session clears the previous timer before arming a new one.
+			handlers.get("session_start")?.({}, mainContext);
+			expect(cleared).toEqual([1]);
+			expect(intervals).toEqual([1, 2]);
+
+			handlers.get("session_shutdown")?.({}, mainContext);
+			expect(cleared).toEqual([1, 2]);
+		} finally {
+			if (previousRegistry === undefined) delete global[registryKey];
+			else global[registryKey] = previousRegistry;
+		}
+	});
+});
+
+describe("Throughput native spinner parity", () => {
+	test("advances frames on OMP's 80ms status cadence", () => {
+		expect(SPINNER_ADVANCE_MS).toBe(80);
+		const frames = ["⣾", "⣽", "⣻", "⢿", "⡿", "⣟", "⣯", "⣷"];
+		expect(statusSpinnerFrame(frames.length, 0)).toBe(0);
+		expect(statusSpinnerFrame(frames.length, 79)).toBe(0);
+		expect(statusSpinnerFrame(frames.length, 80)).toBe(1);
+		expect(statusSpinnerFrame(frames.length, 80 * frames.length)).toBe(0);
+		expect(statusSpinnerFrame(0, 1234)).toBe(0);
+	});
+
+	test("renders running workers with the theme's own spinner frames", () => {
+		const global = globalThis as Record<symbol, unknown>;
+		const registryKey = Symbol.for("omp.throughput.registry.v4");
+		const previousRegistry = global[registryKey];
+		delete global[registryKey];
+		const widgets: string[][] = [];
+		const makeContext = (sessionId: string, name: string, agent: ExtensionContext["agent"]) => ({
+			agent,
+			sessionManager: {
+				getSessionId: () => sessionId,
+				getSessionName: () => name,
+				getSessionFile: () => `/sessions/${sessionId}.jsonl`,
+				getHeader: () => ({}),
+			},
+			model: { id: "test/model" },
+			setInterval: () => 0,
+			clearTimer: () => {},
+			ui: {
+				theme: { fg: (_color: string, value: string) => value, spinnerFrames: ["A", "B"] },
+				setWidget: (_name: string, lines: unknown) => {
+					if (Array.isArray(lines)) widgets.push(lines as string[]);
+				},
+			},
+		});
+		const createPi = () => {
+			const handlers = new Map<string, (event: unknown, ctx: unknown) => void>();
+			throughput({
+				on: (event: string, handler: unknown) => {
+					handlers.set(event, handler as (event: unknown, ctx: unknown) => void);
+				},
+				getThinkingLevel: () => "low",
+			} as unknown as Parameters<typeof throughput>[0]);
+			return handlers;
+		};
+		const mainContext = makeContext("spinner-main", "main", {
+			kind: "main", id: "registry-spinner-main", name: "main", depth: 0,
+		});
+		const workerContext = makeContext("spinner-worker", "spinworker", {
+			kind: "sub", id: "registry-spinner-worker", name: "task", depth: 1, parentId: "registry-spinner-main",
+		});
+		const mainHandlers = createPi();
+		const workerHandlers = createPi();
+		try {
+			mainHandlers.get("session_start")?.({}, mainContext);
+			workerHandlers.get("session_start")?.({}, workerContext);
+			workerHandlers.get("message_start")?.({ message: { role: "assistant" } }, workerContext);
+			mainHandlers.get("session_start")?.({}, mainContext);
+			const rows = widgets.at(-1) ?? [];
+			const workerRow = rows.find((line) => line.includes("spinworker"));
+			expect(workerRow).toBeDefined();
+			expect(["A", "B"]).toContain(workerRow?.[0]);
+		} finally {
+			workerHandlers.get("session_shutdown")?.({}, workerContext);
+			mainHandlers.get("session_shutdown")?.({}, mainContext);
+			if (previousRegistry === undefined) delete global[registryKey];
+			else global[registryKey] = previousRegistry;
+		}
+	});
 });

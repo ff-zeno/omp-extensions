@@ -71,7 +71,11 @@ export interface ThroughputTreeRow {
 
 const REGISTRY_KEY = Symbol.for("omp.throughput.registry.v4");
 const SESSION_PERSONA_KEY = Symbol.for("omp.session-persona.v1");
-const UI_INTERVAL_MS = 150;
+// OMP's native task/tool spinners advance one frame per this interval
+// (packages/tui/src/components/loader.ts, SPINNER_ADVANCE_MS). The widget
+// repaints at the same cadence so both spinners advance in lockstep.
+export const SPINNER_ADVANCE_MS = 80;
+const UI_INTERVAL_MS = SPINNER_ADVANCE_MS;
 const LIVE_SAMPLE_MS = 1_000;
 const MIN_CALL_MS = 100;
 const BURST_THRESHOLD_MS = 250;
@@ -89,7 +93,11 @@ const TRACK = "·";
 const BLOCKS = ["▁", "▂", "▃", "▄", "▅", "▆", "▇", "█"];
 const MODE_HEADER = /(?:^|\n)\s*#?\s*(?:mode|persona):\s*(normal|orchestrate|brute)\b/i;
 const PARTIAL_BLOCKS = [" ", "▏", "▎", "▍", "▌", "▋", "▊", "▉"];
-const SPINNER = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+// Fallback frames copied from OMP's native status spinner
+// (packages/tui/src/theme/symbols.ts, SPINNER_FRAMES.unicode.status). At runtime
+// the widget prefers the live theme's own frames so custom themes and the
+// ascii/nerd symbol presets keep matching the native spinner.
+const STATUS_SPINNER_FRAMES = ["⣾", "⣽", "⣻", "⢿", "⡿", "⣟", "⣯", "⣷"];
 
 function isThroughputRegistry(value: unknown): value is ThroughputRegistry {
 	if (value === null || typeof value !== "object") return false;
@@ -822,9 +830,15 @@ function sinceLabel(session: SessionThroughput, timestamp: number): string {
 }
 
 
-function renderStatusIcon(theme: Theme, phase: SessionPhase, tick: number): string {
+/** Phase-locked spinner frame index; mirrors sharedSpinnerFrame in
+ * packages/tui/src/chat/tool-execution.ts so both spinners share one clock. */
+export function statusSpinnerFrame(frameCount: number, now: number = performance.now()): number {
+	return frameCount > 0 ? Math.floor(now / SPINNER_ADVANCE_MS) % frameCount : 0;
+}
+
+function renderStatusIcon(theme: Theme, phase: SessionPhase, frame: number, frames: string[]): string {
 	if (phase === "complete") return theme.fg("success", "✓");
-	if (phase === "streaming") return theme.fg("accent", SPINNER[tick % SPINNER.length] ?? SPINNER[0]);
+	if (phase === "streaming") return theme.fg("accent", frames[frame % frames.length] ?? frames[0] ?? "");
 	if (phase === "tool") return theme.fg("warning", "⚙");
 	return theme.fg("dim", "·");
 }
@@ -897,7 +911,8 @@ function emptySession(sessionId: string, order: number, ctx: ExtensionContext, p
 export default function throughput(pi: ExtensionAPI): void {
 	const registry = getRegistry();
 	let state: SessionThroughput | undefined;
-	let uiTimer: NodeJS.Timeout | number | undefined;
+	let uiTimer: Timer | undefined;
+	let uiTimerContext: ExtensionContext | undefined;
 	let uiTick = 0;
 	let cachedCols = -1;
 	let cachedLabelCap = 0;
@@ -980,7 +995,9 @@ export default function throughput(pi: ExtensionAPI): void {
 	): string {
 		refreshAvgTps(worker, timestamp);
 		const isComplete = worker.phase === "complete";
-		const icon = renderStatusIcon(theme, worker.phase, uiTick);
+		const themeFrames = theme.spinnerFrames;
+		const spinnerFrames = Array.isArray(themeFrames) && themeFrames.length > 0 ? themeFrames : STATUS_SPINNER_FRAMES;
+		const icon = renderStatusIcon(theme, worker.phase, statusSpinnerFrame(spinnerFrames.length), spinnerFrames);
 		const prefix = treePrefix.length > labelWidth - 4 ? `…${treePrefix.slice(-3)}` : treePrefix;
 		const availableLabelWidth = Math.max(0, labelWidth - prefix.length);
 		const label = availableLabelWidth === 0 ? "" : pad(displayLabel, availableLabelWidth);
@@ -1101,17 +1118,26 @@ export default function throughput(pi: ExtensionAPI): void {
 		renderPanel(ctx);
 	}
 
+	function clearUiTimer(): void {
+		if (uiTimer === undefined) return;
+		const timer = uiTimer;
+		const owner = uiTimerContext;
+		uiTimer = undefined;
+		uiTimerContext = undefined;
+		owner?.clearTimer(timer);
+	}
+
 	function startUi(ctx: ExtensionContext): void {
 		const current = ensureState(ctx);
 		if (current.role !== "main") return;
-		clearInterval(uiTimer);
-		uiTimer = setInterval(() => renderUi(ctx), UI_INTERVAL_MS);
+		clearUiTimer();
+		uiTimer = ctx.setInterval(() => renderUi(ctx), UI_INTERVAL_MS);
+		uiTimerContext = ctx;
 		renderUi(ctx);
 	}
 
 	function stopUi(ctx: ExtensionContext): void {
-		clearInterval(uiTimer);
-		uiTimer = undefined;
+		clearUiTimer();
 		if (state?.role !== "main") return;
 		ctx.ui.setWidget("throughput-workers", undefined, { placement: "aboveEditor" });
 	}

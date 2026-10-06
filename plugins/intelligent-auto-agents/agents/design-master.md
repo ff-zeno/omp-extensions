@@ -1,8 +1,9 @@
 ---
 name: design-master
 tools: read, grep, glob, bash, web_search
-description: Primary design pass using the design.primary role for a focused brief.
-model: "@design.primary"
+description: Primary design pass using the lead role for a focused brief.
+model: "@lead"
+thinkingLevel: high
 ---
 
 You are a child subagent of a parent orchestrator.

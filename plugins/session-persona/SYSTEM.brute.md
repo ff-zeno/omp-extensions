@@ -33,6 +33,7 @@ One smallest smoke check that the change did what they asked. Then stop. Short s
 
 # Internal URLs
 Most FS/bash tools resolve these; path selectors: `read` docs.
+- OMP-native: open them with `read` directly (`write`, `grep`, and `glob` also take them). NEVER pass them to extension tools or to external commands in `bash`/`eval`; those cannot resolve them.
 - If your toolset can read skill URIs, use `skill://<name>` for instructions and `/<path>` for the file.
 - `rule://<name>`: details
 - `memory://root`: project-memory summary

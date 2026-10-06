@@ -1,5 +1,9 @@
-import { describe, expect, test } from "bun:test";
+import { afterAll, afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { homedir, tmpdir } from "node:os";
+import { join, relative } from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@oh-my-pi/pi-coding-agent";
+import type { AutocompleteItem } from "@oh-my-pi/pi-tui";
 import sessionPersona from "./index.ts";
 
 type SessionMode = "normal" | "brute" | "orchestrate";
@@ -26,23 +30,85 @@ type HookResult = { systemPrompt?: string[] } | undefined;
 type Hook = (event: TestEvent, ctx?: ExtensionContext) => HookResult;
 
 
-function registerExtension(): Map<string, Hook> {
-	const hooks = new Map<string, Hook>();
+interface Shortcut {
+	description?: string;
+	handler: (ctx: ExtensionContext) => void;
+}
+interface Command {
+	description?: string;
+	getArgumentCompletions?: (prefix: string) => AutocompleteItem[] | null;
+	handler: (args: string, ctx: ExtensionContext) => Promise<void>;
+}
+interface Registration {
+	hooks: Map<string, Hook>;
+	shortcuts: Map<string, Shortcut>;
+	commands: Map<string, Command>;
+}
+
+const ENV_KEYS = ["PI_CODING_AGENT_DIR", "PI_CONFIG_DIR", "OMP_PROFILE", "PI_PROFILE"] as const;
+const savedEnv = Object.fromEntries(ENV_KEYS.map((key) => [key, process.env[key]]));
+const scratchRoot = mkdtempSync(join(tmpdir(), "session-persona-test-"));
+let scratchCount = 0;
+
+function restoreEnv(): void {
+	for (const key of ENV_KEYS) {
+		if (savedEnv[key] === undefined) delete process.env[key];
+		else process.env[key] = savedEnv[key];
+	}
+}
+
+// Every load reads keybindings from a scratch agent dir, never the user's real one.
+function scratchAgentDir(keybindings?: string): string {
+	const dir = join(scratchRoot, `agent-${scratchCount++}`);
+	mkdirSync(dir, { recursive: true });
+	if (keybindings !== undefined) writeFileSync(join(dir, "keybindings.yml"), keybindings);
+	return dir;
+}
+
+beforeEach(() => {
+	for (const key of ["PI_CONFIG_DIR", "OMP_PROFILE", "PI_PROFILE"] as const) delete process.env[key];
+	process.env.PI_CODING_AGENT_DIR = scratchAgentDir();
+});
+afterEach(restoreEnv);
+afterAll(() => rmSync(scratchRoot, { recursive: true, force: true }));
+
+function load(): Registration {
+	const registration: Registration = { hooks: new Map(), shortcuts: new Map(), commands: new Map() };
 	sessionPersona({
-		registerShortcut(_name: string, options: { handler: (ctx: ExtensionContext) => void }) {
-			hooks.set("cycle", (_event, ctx) => {
-				if (ctx) options.handler(ctx);
-			});
+		registerShortcut(key: string, options: Shortcut) {
+			registration.shortcuts.set(key, options);
 		},
-		registerCommand() {},
+		registerCommand(name: string, options: Command) {
+			registration.commands.set(name, options);
+		},
 		on(name: string, handler: unknown) {
-			hooks.set(name, handler as unknown as Hook);
+			registration.hooks.set(name, handler as unknown as Hook);
 		},
 	} as unknown as ExtensionAPI);
 	const modes = registry();
 	modes.mode.clear();
 	modes.pendingMode.clear();
+	return registration;
+}
+
+function loadWithKeybindings(keybindings: string): Registration {
+	process.env.PI_CODING_AGENT_DIR = scratchAgentDir(keybindings);
+	return load();
+}
+
+function registerExtension(): Map<string, Hook> {
+	const { hooks, shortcuts } = load();
+	const [shortcut] = shortcuts.values();
+	hooks.set("cycle", (_event, ctx) => {
+		if (ctx) shortcut.handler(ctx);
+	});
 	return hooks;
+}
+
+function startupNotices(registration: Registration): string[] {
+	const notices: string[] = [];
+	registration.hooks.get("session_start")?.({}, context("startup", "main", { notify: (message) => notices.push(message) }));
+	return notices;
 }
 
 function context(
@@ -411,5 +477,167 @@ describe("session persona modes", () => {
 		);
 		expect(result).toBeUndefined();
 		expect(registry().getMode("normal-child-session")).toBe("normal");
+	});
+});
+
+describe("persona commands", () => {
+	function run(registration: Registration, line: string, ctx: ExtensionContext): Promise<void> {
+		const [name, ...rest] = line.slice(1).split(" ");
+		const command = registration.commands.get(name);
+		if (!command) throw new Error(`/${name} is not registered`);
+		return command.handler(rest.join(" "), ctx);
+	}
+
+	test("registers /persona and one command per persona", () => {
+		expect([...load().commands.keys()].sort()).toEqual(["brute", "normal", "orchestrate", "persona"]);
+	});
+
+	test("/persona with no argument cycles normal → orchestrate → brute → normal", async () => {
+		const registration = load();
+		const notifications: string[] = [];
+		const ctx = context("persona-cycle", "main", { notify: (message) => notifications.push(message) });
+		const seen: string[] = [];
+		for (let i = 0; i < 3; i++) {
+			await run(registration, "/persona", ctx);
+			seen.push(registry().getMode("persona-cycle"));
+		}
+		expect(seen).toEqual(["orchestrate", "brute", "normal"]);
+		expect(notifications).toEqual(["Persona: 🧠 Orchestrate", "Persona: 🚀 Brute", "Persona: 🔘 Normal"]);
+	});
+
+	test("/persona <name> sets that persona regardless of the current one", async () => {
+		const registration = load();
+		const notifications: string[] = [];
+		const ctx = context("persona-set", "main", { notify: (message) => notifications.push(message) });
+		await run(registration, "/persona brute", ctx);
+		expect(registry().getMode("persona-set")).toBe("brute");
+		await run(registration, "/persona  Orchestrate ", ctx);
+		expect(registry().getMode("persona-set")).toBe("orchestrate");
+		await run(registration, "/persona orchestrate", ctx);
+		expect(registry().getMode("persona-set")).toBe("orchestrate");
+		expect(notifications).toEqual(["Persona: 🚀 Brute", "Persona: 🧠 Orchestrate", "Persona: 🧠 Orchestrate"]);
+	});
+
+	test("/persona with an unknown name lists valid personas and keeps the current one", async () => {
+		const registration = load();
+		const notifications: string[] = [];
+		const ctx = context("persona-invalid", "main", { notify: (message) => notifications.push(message) });
+		await run(registration, "/persona brute", ctx);
+		await run(registration, "/persona orch", ctx);
+		expect(registry().getMode("persona-invalid")).toBe("brute");
+		expect(notifications.at(-1)).toBe('Unknown persona "orch". Valid personas: normal, orchestrate, brute.');
+	});
+
+	test("/normal, /orchestrate, and /brute set their persona directly", async () => {
+		const registration = load();
+		const notifications: string[] = [];
+		const ctx = context("persona-direct", "main", { notify: (message) => notifications.push(message) });
+		const seen: string[] = [];
+		for (const line of ["/brute", "/orchestrate", "/normal", "/normal"]) {
+			await run(registration, line, ctx);
+			seen.push(registry().getMode("persona-direct"));
+		}
+		expect(seen).toEqual(["brute", "orchestrate", "normal", "normal"]);
+		expect(notifications).toEqual([
+			"Persona: 🚀 Brute",
+			"Persona: 🧠 Orchestrate",
+			"Persona: 🔘 Normal",
+			"Persona: 🔘 Normal",
+		]);
+	});
+
+	test("/persona completes persona names from the typed prefix", () => {
+		const complete = load().commands.get("persona")?.getArgumentCompletions;
+		expect(complete?.("")?.map((item) => item.value)).toEqual(["normal", "orchestrate", "brute"]);
+		expect(complete?.("B")?.map((item) => item.value)).toEqual(["brute"]);
+		expect(complete?.("x")).toBeNull();
+	});
+});
+
+describe("persona hotkey", () => {
+	test("binds Ctrl+Alt+P by default and names it in the descriptions", () => {
+		const registration = load();
+		expect([...registration.shortcuts.keys()]).toEqual(["ctrl+alt+p"]);
+		expect(registration.shortcuts.get("ctrl+alt+p")?.description).toContain("(Ctrl+Alt+P)");
+		expect(registration.commands.get("persona")?.description).toContain("(Ctrl+Alt+P)");
+		expect(startupNotices(registration)).toEqual([]);
+	});
+
+	test("the hotkey cycles the persona", () => {
+		const registration = load();
+		const ctx = context("hotkey-cycle", "main");
+		const handler = registration.shortcuts.get("ctrl+alt+p")?.handler;
+		handler?.(ctx);
+		expect(registry().getMode("hotkey-cycle")).toBe("orchestrate");
+		handler?.(ctx);
+		expect(registry().getMode("hotkey-cycle")).toBe("brute");
+	});
+
+	test("a list remap replaces the default with canonical chords", () => {
+		const registration = loadWithKeybindings('sessionPersona.cycle: ["Alt+Ctrl+X", f8, ctrl+alt+x]\n');
+		expect([...registration.shortcuts.keys()]).toEqual(["ctrl+alt+x", "f8"]);
+		expect(registration.shortcuts.get("f8")?.description).toContain("(F8)");
+		expect(registration.commands.get("persona")?.description).toContain("(Ctrl+Alt+X, F8)");
+		expect(startupNotices(registration)).toEqual([]);
+	});
+
+	test("a single chord string remaps the hotkey", () => {
+		const registration = loadWithKeybindings("app.model.select: alt+m\nsessionPersona.cycle: super+shift+k\n");
+		expect([...registration.shortcuts.keys()]).toEqual(["shift+super+k"]);
+	});
+
+	test("an empty list disables the hotkey without a notice", () => {
+		const registration = loadWithKeybindings("sessionPersona.cycle: []\n");
+		expect(registration.shortcuts.size).toBe(0);
+		expect(registration.commands.get("persona")?.description).not.toContain("(");
+		expect(startupNotices(registration)).toEqual([]);
+	});
+
+	test("invalid chords are rejected with a notice and valid ones still bind", () => {
+		const registration = loadWithKeybindings(
+			'sessionPersona.cycle: [ctrl+alt+y, hyper+x, p, shift+q, ctrl+p, "ctrl+", 5]\n',
+		);
+		expect([...registration.shortcuts.keys()]).toEqual(["ctrl+alt+y"]);
+		const notices = startupNotices(registration);
+		expect(notices).toHaveLength(6);
+		for (const [index, chord] of ['"hyper+x"', '"p"', '"shift+q"', '"ctrl+p"', '"ctrl+"', "5"].entries()) {
+			expect(notices[index]).toContain(`ignoring ${chord} for sessionPersona.cycle`);
+		}
+		expect(notices[3]).toContain("reserved by OMP");
+		expect(startupNotices(registration)).toEqual([]);
+	});
+
+	test("a list of only invalid chords binds nothing and says /persona still works", () => {
+		const registration = loadWithKeybindings("sessionPersona.cycle: [meta+x]\n");
+		expect(registration.shortcuts.size).toBe(0);
+		expect(startupNotices(registration).at(-1)).toContain("/persona still works");
+	});
+
+	test("a value that is neither a chord nor a list keeps the default with a notice", () => {
+		const registration = loadWithKeybindings("sessionPersona.cycle:\n  key: ctrl+alt+x\n");
+		expect([...registration.shortcuts.keys()]).toEqual(["ctrl+alt+p"]);
+		expect(startupNotices(registration)[0]).toContain("must be a chord or a list of chords");
+	});
+
+	test("an unparsable keybindings file keeps the default with a notice", () => {
+		const registration = loadWithKeybindings("sessionPersona.cycle: [ctrl+alt+x\n");
+		expect([...registration.shortcuts.keys()]).toEqual(["ctrl+alt+p"]);
+		expect(startupNotices(registration)[0]).toContain("cannot read");
+	});
+
+	test("a named profile inherits the default profile entry and can override it", () => {
+		// PI_CONFIG_DIR is home-relative in OMP; point it at a scratch config root.
+		const configRoot = join(scratchRoot, `config-${scratchCount++}`);
+		const defaultAgent = join(configRoot, "agent");
+		const profileAgent = join(configRoot, "profiles", "work", "agent");
+		mkdirSync(defaultAgent, { recursive: true });
+		mkdirSync(profileAgent, { recursive: true });
+		writeFileSync(join(defaultAgent, "keybindings.yml"), "sessionPersona.cycle: ctrl+alt+x\n");
+		writeFileSync(join(profileAgent, "keybindings.yml"), "app.model.select: alt+m\n");
+		process.env.PI_CONFIG_DIR = relative(homedir(), configRoot);
+		process.env.OMP_PROFILE = "work";
+		expect([...load().shortcuts.keys()]).toEqual(["ctrl+alt+x"]);
+		writeFileSync(join(profileAgent, "keybindings.yml"), "sessionPersona.cycle: ctrl+alt+y\n");
+		expect([...load().shortcuts.keys()]).toEqual(["ctrl+alt+y"]);
 	});
 });

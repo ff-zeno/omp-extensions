@@ -1,162 +1,294 @@
 {
-	"version": 5,
+	"version": 7,
 	"enabled": true,
 	"timeoutMs": 2000,
 	"maxInputBytes": 24000,
 	"minConfidence": 0.6,
+	"jevModel": "jev-latest",
 	"planningReadiness": {
 		"autonomous-plan": "Requirements, target files, acceptance criteria, and technical constraints are concrete and settled. The planner can draft an implementation plan without guessing human product preferences or architectural trade-offs.",
 		"discuss-with-user": "Requirements are open-ended, under-specified, or involve unresolved product or architectural forks (for example database choice, auth architecture, major dependency changes, or broad scope). Clarify trade-offs with the operator in main chat before delegating to a planner subagent."
 	},
-	"jevModel": "jev-latest",
-	"difficulty": [
-		"Exact: fully specified work with named targets, no hidden edge cases, and nothing left to decide.",
-		"Ordinary: a settled spec or a bounded change in one area. Routine care is enough.",
-		"Hard: ambiguous behavior, several interacting parts, or a review where missed cases are likely without extra care.",
-		"Critical: a new system, a major redesign, security or data-loss risk, or a framing that would be expensive to undo."
+	"difficulty": {
+		"exact": "Fully specified work with named targets, no hidden edge cases, and nothing left to decide.",
+		"ordinary": "A settled spec or a bounded change in one area. Routine care is enough.",
+		"hard": "Ambiguous behavior, several interacting parts, or a review where missed cases are likely without extra care.",
+		"critical": "A new system, a major redesign, security or data-loss risk, or a framing that would be expensive to undo."
+	},
+	"nuances": [
+		"Rate difficulty from the work itself, not from the brief's length or tone.",
+		"A brief that asks to investigate but already names the fix is grunt, not lead.",
+		"Reviewing an implemented diff against a settled spec is grunt; judging whether the design itself is right is lead.",
+		"Git work that rewrites history, resolves conflicts, or touches a shared branch rates hard; a routine commit of reviewed changes rates exact.",
+		"Sonnet above low costs about as much as Opus low and does worse, so never raise difficulty to buy Sonnet more effort; the grunt pool already sends anything above exact to Opus low.",
+		"Deepseek 4.1 Flash always runs at low reasoning, no matter the resolved difficulty",
+		"Gemini 3.8 Flash is good at orchestrating, not great as a grunt subagent. Use for orchestrator roles and vision only"
 	],
-	"speedPoolLimits": {
+	"models": {
+		"anthropic/claude-opus-5-5": {
+			"supports": [
+				"low",
+				"medium",
+				"high",
+				"xhigh",
+				"max"
+			],
+			"exact": "low",
+			"ordinary": "medium",
+			"hard": "high",
+			"critical": "xhigh"
+		},
+		"openai-codex/gpt-6.1-sol": {
+			"supports": [
+				"low",
+				"medium",
+				"high",
+				"xhigh",
+				"max"
+			],
+			"exact": "low",
+			"ordinary": "medium",
+			"hard": "high",
+			"critical": "xhigh"
+		},
+		"xai-oauth/grok-4.6": {
+			"supports": [
+				"minimal",
+				"low",
+				"medium",
+				"high",
+				"xhigh"
+			],
+			"exact": "low",
+			"ordinary": "high",
+			"hard": "high",
+			"critical": "xhigh"
+		},
+		"anthropic/claude-sonnet-5-5": {
+			"supports": [
+				"low",
+				"medium",
+				"high",
+				"xhigh",
+				"max"
+			],
+			"exact": "low",
+			"ordinary": "low",
+			"hard": "low",
+			"critical": "low"
+		},
+		"google-antigravity/gemini-3.8-flash": {
+			"supports": [
+				"minimal",
+				"low",
+				"medium",
+				"high"
+			],
+			"exact": "low",
+			"ordinary": "high",
+			"hard": "high",
+			"critical": "high"
+		},
+		"surplus/deepseek-v4.1-flash": {
+			"supports": [
+				"low",
+				"high",
+				"max"
+			],
+			"exact": "low",
+			"ordinary": "low",
+			"hard": "low",
+			"critical": "low"
+		},
+		"*": {
+			"exact": "low",
+			"ordinary": "medium",
+			"hard": "high",
+			"critical": "high"
+		}
+	},
+	"poolLimits": {
 		"demoteAt": 0.8,
 		"skipAt": 0.95,
 		"burstPenalty": 0.01,
-		"usageTimeoutMs": 1500,
+		"finalWindowMs": 18000000,
+		"usageTimeoutMs": 5000,
 		"maxReportAgeMs": 900000,
 		"clockSkewMs": 60000,
 		"failureDemoteAfter": 2,
 		"demoteForMs": 1800000
 	},
-	"profiles": [
-		{
-			"id": "grunt",
-			"model": "@grunt",
-			"effort": ["low", "low", "low", "low"],
-			"agents": ["task"],
-			"backups": ["grunt-backup", "peer"],
-			"speedPool": [
-				{ "id": "lookup-fast", "maxShortUsed": 0.5, "minWeeklyHeadroom": 0 },
-				{ "id": "lookup-grok", "minWeeklyHeadroom": 0.05, "minMonthlyHeadroom": 0 }
+	"pools": {
+		"mechanical": {
+			"members": [
+				{
+					"model": "@frontier-3",
+					"effort": "low",
+					"minWeeklyHeadroom": 0.05,
+					"minMonthlyHeadroom": 0
+				},
+				{
+					"model": "anthropic/claude-sonnet-5-5",
+					"effort": "low",
+					"maxShortUsed": 0.7,
+					"minWeeklyHeadroom": 0.1
+				}
 			],
-			"speedPoolPlacement": "after",
-			"description": "Code work on a settled spec: directed edits, new tests, performance fixes, and mechanical follow-through. The spec already fixes the interfaces and behavior."
+			"fallback": {
+				"model": "@grunt",
+				"effort": "low"
+			}
 		},
-		{
-			"id": "grunt-backup",
-			"model": "@mechanic",
-			"effort": ["max", "max", "max", "max"],
-			"agents": [],
-			"description": "Settled-spec code at full effort: carry out directed edits and tests when interfaces and behavior are already fixed. Unlike adversarial investigation, this is not for finding a cause or redesigning the approach."
-		},
-		{
-			"id": "lead",
-			"model": "@lead",
-			"effort": ["high", "high", "high", "xhigh"],
-			"agents": ["task"],
-			"backups": ["peer"],
-			"description": "Implementation that needs judgment: choosing interfaces, weighing trade-offs, or tracing interacting behavior. Not work with a settled spec."
-		},
-		{
-			"id": "peer",
-			"model": "@peer-1",
-			"effort": ["high", "high", "high", "xhigh"],
-			"agents": ["task"],
-			"backups": ["lead"],
-			"description": "Adversarial work: migrations, hard debugging, or finding a cause before anything is designed. Not interface design and not a settled-spec edit."
-		},
-		{
-			"id": "review",
-			"model": "@mechanic",
-			"effort": ["max", "max", "max", "max"],
-			"agents": ["reviewer"],
-			"backups": ["peer"],
-			"description": "Review or verify existing code: tests, edge cases, and checking that a fix holds. Not new implementation."
-		},
-		{
-			"id": "mechanical",
-			"model": "@mechanic",
-			"effort": ["low", "low", "low", "low"],
-			"agents": ["sonic", "scout"],
-			"backups": ["lookup-fast"],
-			"speedPool": [
-				{ "id": "lookup-fast", "maxShortUsed": 0.5, "minWeeklyHeadroom": 0 },
-				{ "id": "lookup-grok", "minWeeklyHeadroom": 0.05, "minMonthlyHeadroom": 0 }
+		"grunt": {
+			"members": [
+				{
+					"model": "@frontier-3",
+					"minWeeklyHeadroom": 0.05,
+					"minMonthlyHeadroom": 0
+				},
+				{
+					"model": "anthropic/claude-sonnet-5-5",
+					"effort": "low",
+					"difficulties": [
+						"exact"
+					],
+					"maxShortUsed": 0.7,
+					"minWeeklyHeadroom": 0.1
+				},
+				{
+					"model": "@lead",
+					"effort": "low",
+					"maxShortUsed": 0.7,
+					"minWeeklyHeadroom": 0.1
+				}
 			],
-			"speedPoolPlacement": "before",
-			"description": "Directed tool runs and read-only lookup with exact targets (lint, test, typecheck, build, formatters, named commands); no code writing, no design choices, no git history operations."
+			"fallback": {
+				"model": "@grunt",
+				"effort": "low"
+			}
 		},
-		{
-			"id": "lookup-grok",
-			"model": "@peer-2",
-			"effort": ["low", "low", "low", "low"],
-			"agents": [],
-			"description": "Fast exact lookup and bounded command follow-through on a paid subscription. No code writing or design choices."
-		},
-		{
-			"id": "lookup-fast",
-			"model": "@fast",
-			"effort": ["low", "low", "low", "low"],
-			"agents": [],
-			"description": "Fast exact lookup and bounded command follow-through when the target and operation are already named. No code writing or design choices."
-		},
-		{
-			"id": "git",
-			"model": "@peer-1",
-			"effort": ["low", "low", "low", "low"],
-			"agents": ["git"],
-			"backups": ["mechanical"],
-			"description": "Commits, pushes, branches, merges, rebases, tags, and PR updates following the repository's Git flow; writes the commit messages. Not code changes."
-		},
-		{
-			"id": "plan",
-			"model": "@lead",
-			"effort": ["medium", "medium", "high", "xhigh"],
-			"agents": ["plan"],
-			"backups": ["plan-peer"],
-			"description": "Main planner. Writes the plan. Never a review of an existing plan."
-		},
-		{
-			"id": "plan-peer",
-			"model": "@peer-1",
-			"effort": ["high", "high", "high", "high"],
-			"agents": ["plan-review-peer", "plan-review-frontier-2"],
-			"description": "Adversarial review of an ordinary written plan: omissions and feasibility. First peer. Do not lead, rewrite, or expand the plan. Not a critical-plan review."
-		},
-		{
-			"id": "plan-peer-critical",
-			"model": "@secondary-planner",
-			"effort": ["xhigh", "xhigh", "xhigh", "xhigh"],
-			"agents": ["plan-review-peer", "plan-review-frontier-2"],
-			"backups": ["plan-peer"],
-			"description": "Secondary planner review of a critical written plan: broad scope, a new system, a major redesign, or commitments that are costly to undo. Not an ordinary adversarial pass, and not the main plan."
-		},
-		{
-			"id": "orchestrator",
-			"effort": ["high", "high", "high", "high"],
-			"agents": ["orchestrator"],
-			"description": "Seated coordinator. The agent keeps its bound model at high. Decomposes independent work and synthesizes results. Not implementation, not a review, and not a switch to the main planner."
-		},
-		{
-			"id": "frontier-review",
-			"effort": ["high", "high", "high", "xhigh"],
-			"agents": [
-				"peer-review-frontier-1",
-				"peer-review-frontier-2",
-				"peer-review-frontier-3",
-				"plan-review-frontier-1",
-				"plan-review-frontier-3"
+		"plan-review": {
+			"excludePlanAuthors": true,
+			"members": [
+				{
+					"model": "@frontier-2"
+				},
+				{
+					"model": "@frontier-1"
+				},
+				{
+					"model": "@frontier-3"
+				}
 			],
-			"description": "Seated frontier reviewer. The agent keeps its bound model; only effort changes. Ordinary review is high, critical review is xhigh."
-		},
-		{
-			"id": "design-primary",
-			"effort": ["high", "high", "high", "xhigh"],
-			"agents": ["design-master"],
-			"description": "Seated primary designer. The agent keeps its bound model; only effort changes."
-		},
-		{
-			"id": "design-secondary",
-			"effort": ["medium", "medium", "high", "xhigh"],
-			"agents": ["design-second"],
-			"description": "Seated second designer. The agent keeps its bound model; only effort changes."
+			"fallback": {
+				"model": "@frontier-2"
+			}
 		}
-	]
+	},
+	"taskTypes": {
+		"mechanical": {
+			"pool": "mechanical",
+			"description": "Exact lookups, directed tool runs (lint, test, typecheck, build, named commands), and non-code writes with exact content. No source-code edits, no design choices, no git operations."
+		},
+		"grunt": {
+			"pool": "grunt",
+			"effort": [
+				"medium",
+				"high"
+			],
+			"description": "Work whose contract the brief already fixes: settled-spec code edits, new tests, bounded investigation toward a stated fix, verification-style review of implemented code, and git operations (commits, branches, merges, pull requests) that need care but no design decisions. Choose this even when the executor must investigate how to implement, as long as what to build is settled."
+		},
+		"lead": {
+			"model": "@lead",
+			"effort": [
+				"high",
+				"xhigh"
+			],
+			"backups": [
+				"@frontier-3"
+			],
+			"description": "Work where the brief leaves a real decision open: choosing interfaces or architecture, weighing trade-offs, finding an unknown root cause, migrations with interacting parts. Not work whose contract is already fixed."
+		},
+		"vision": {
+			"model": "@vision",
+			"effort": [
+				"medium",
+				"high"
+			],
+			"backups": [
+				"@lead"
+			],
+			"description": "Image, screenshot, or video analysis where the work is mainly looking at visual media. Not code changes that merely mention an image."
+		},
+		"security-review": {
+			"model": "@lead",
+			"effort": [
+				"high",
+				"xhigh"
+			],
+			"description": "Security review: finding exploitable vulnerabilities, auth or secret handling flaws, injection, or data exposure, with evidence."
+		},
+		"plan": {
+			"model": "@lead",
+			"effort": [
+				"medium",
+				"xhigh"
+			],
+			"description": "Writing an implementation plan. Never a review of an existing plan."
+		},
+		"plan-review": {
+			"pool": "plan-review",
+			"effort": [
+				"high",
+				"xhigh"
+			],
+			"description": "Adversarial review of a written plan: omissions, feasibility, sequencing, and for critical plans the deeper risks. Do not rewrite the plan."
+		},
+		"frontier-review": {
+			"effort": [
+				"high",
+				"xhigh"
+			],
+			"description": "Independent end-of-batch review of a diff, plan, or changed contract by a named frontier reviewer. The model comes from the brief's directive."
+		}
+	},
+	"agents": {
+		"covered": [
+			"task",
+			"sonic",
+			"scout",
+			"reviewer",
+			"security-reviewer",
+			"git",
+			"plan"
+		],
+		"pinned": [
+			"orchestrator",
+			"design-master",
+			"design-second",
+			"review-closer",
+			"review-verifier",
+			"review-frontier-1",
+			"review-frontier-2",
+			"review-frontier-3",
+			"medium",
+			"slow1",
+			"slow2",
+			"slow3"
+		]
+	},
+	"planMetadata": {
+		"frontMatterKey": "plan",
+		"authorsField": "authored-by",
+		"reviewsField": "reviews",
+		"scanLines": 60
+	},
+	"directiveTargets": {
+		"frontier-1": "@frontier-1",
+		"frontier-2": "@frontier-2",
+		"frontier-3": "@frontier-3",
+		"lead": "@lead",
+		"grunt": "@grunt",
+		"vision": "@vision"
+	}
 }

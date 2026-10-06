@@ -4,29 +4,40 @@ import { TypeSafeJudge, scopeAntigravityLimitsForModel, type UsageReport } from 
 import * as PiAi from "@oh-my-pi/pi-ai";
 import { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import { type ExtensionAPI, type ExtensionContext, getSupportedEfforts } from "@oh-my-pi/pi-coding-agent";
+import { readFileSync } from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
 import catalogData from "./catalog.json";
 import {
+	capEffort,
 	choose,
 	type Decision,
-	effortVaries,
+	type Difficulty,
+	effortForModel,
+	type Effort,
+	type EffortRange,
 	type Evaluate,
 	evaluatePlanningReadiness,
 	fitEffort,
+	isLiteralModel,
 	type ModelRef,
 	ORDINARY,
 	parseCatalog,
+	parseDirective,
+	type PlanProvenance,
+	planProvenance,
 	type PoolMember,
 	type PoolUsage,
 	type PoolVerdict,
-	RoutingAuthenticationError,
-	type UsageSummary,
+	preferPlanReviewMembers,
 	rankPool,
+	RoutingAuthenticationError,
+	taskTypeEffortVaries,
+	type UsageSummary,
 } from "./routing";
 
 const catalog = parseCatalog(catalogData);
 const STATE_ENTRY = "intelligent-auto-agents-state";
-/** Short names for difficulty levels, taken from the text before the colon in each ladder entry. */
-const DIFFICULTY_NAMES = catalog.difficulty.map(entry => entry.split(":")[0].trim().toLowerCase());
 type PoolReservation = {
 	token: string;
 	agent: string;
@@ -53,6 +64,7 @@ const poolReservations: PoolReservation[] = [];
 const childReservationTokens = new Map<string, string>();
 const poolDemotions = new Map<string, DemotionRecord>();
 let reservationSequence = 0;
+let inFlightPoolUsageReports: Promise<unknown> | undefined;
 const RESERVATION_SAFETY_MS = 2 * 60 * 60 * 1000;
 
 export function resetSpeedPoolStateForTests(): void {
@@ -60,6 +72,7 @@ export function resetSpeedPoolStateForTests(): void {
 	childReservationTokens.clear();
 	poolDemotions.clear();
 	reservationSequence = 0;
+	inFlightPoolUsageReports = undefined;
 }
 type PoolRouteReport = {
 	status?: string;
@@ -109,21 +122,51 @@ function isUsableOAuthCredential(value: unknown): boolean {
 	return record(credential) && credential.type === "oauth" && credential.disabled !== true;
 }
 
+function sharedPoolUsageReports(registry: PoolUsageRegistry): Promise<unknown> {
+	if (!inFlightPoolUsageReports) {
+		const timeoutSignal = AbortSignal.timeout(catalog.poolLimits.usageTimeoutMs);
+		const pending = registry.authStorage.usage.reports({
+			baseUrlResolver: provider => registry.getProviderBaseUrl?.(provider),
+			signal: timeoutSignal,
+		});
+		inFlightPoolUsageReports = pending;
+		void pending
+			.finally(() => {
+				if (inFlightPoolUsageReports === pending) inFlightPoolUsageReports = undefined;
+			})
+			.catch(() => {});
+	}
+	return inFlightPoolUsageReports;
+}
+
+async function awaitOwnSignal<T>(promise: Promise<T>, signal: AbortSignal | undefined): Promise<T | undefined> {
+	if (!signal) return await promise;
+	if (signal.aborted) return undefined;
+	const aborted = Promise.withResolvers<undefined>();
+	const onAbort = () => aborted.resolve(undefined);
+	signal.addEventListener("abort", onAbort, { once: true });
+	try {
+		const outcome = await Promise.race([
+			promise.then(value => ({ ok: true as const, value })),
+			aborted.promise.then(() => ({ ok: false as const })),
+		]);
+		return outcome.ok ? outcome.value : undefined;
+	} finally {
+		signal.removeEventListener("abort", onAbort);
+	}
+}
+
 async function fetchPoolUsage(ctx: ExtensionContext, signal: AbortSignal | undefined): Promise<PoolUsage | undefined> {
 	const registry = poolUsageRegistry(ctx);
 	if (!registry) return undefined;
-	const timeoutSignal = AbortSignal.timeout(catalog.speedPoolLimits.usageTimeoutMs);
-	const requestSignal = signal ? AbortSignal.any([signal, timeoutSignal]) : timeoutSignal;
+	if (signal?.aborted) return undefined;
 	let rawReports: unknown;
 	try {
-		rawReports = await registry.authStorage.usage.reports({
-			baseUrlResolver: provider => registry.getProviderBaseUrl?.(provider),
-			signal: requestSignal,
-		});
+		rawReports = await awaitOwnSignal(sharedPoolUsageReports(registry), signal);
 	} catch {
 		return undefined;
 	}
-	if (!Array.isArray(rawReports)) return undefined;
+	if (signal?.aborted || !Array.isArray(rawReports)) return undefined;
 	const reports = rawReports.filter(isUsageReport);
 	const providers = new Set(reports.map(report => report.provider));
 	const credentialCounts: Record<string, number> = {};
@@ -167,6 +210,7 @@ function googleCounterKey(report: UsageReport, modelId: string): string | undefi
 
 function counterForModel(model: ModelRef, reports: readonly UsageReport[]): string | undefined {
 	if (model.provider === "xai-oauth") return "xai-oauth:aggregate";
+	if (model.provider === "anthropic") return "anthropic:shared";
 	if (model.provider === "google-antigravity") {
 		for (const report of reports) {
 			if (report.provider !== model.provider) continue;
@@ -193,6 +237,7 @@ function reservationMatchesReport(reservation: PoolReservation, report: UsageRep
 	if (report.provider !== model.provider) return false;
 	if (model.provider === "xai-oauth")
 		return reservation.counter === "xai-oauth:aggregate" && isAggregateCreditReport(report);
+	if (model.provider === "anthropic") return reservation.counter === "anthropic:shared";
 	if (model.provider === "google-antigravity") return googleCounterKey(report, model.id) === reservation.counter;
 	return false;
 }
@@ -264,7 +309,7 @@ function poolPenalties(members: readonly PoolMember[], usage: PoolUsage, nowMs: 
 			if (candidate.endedAt === undefined) return true;
 			return candidate.endedAt > oldestReport;
 		});
-		penalties.set(counter, reservations.length * catalog.speedPoolLimits.burstPenalty);
+		penalties.set(counter, reservations.length * catalog.poolLimits.burstPenalty);
 	}
 	return penalties;
 }
@@ -354,8 +399,8 @@ function settleChildReservation(
 				}
 				state = state ?? { failures: 0 };
 				state.failures++;
-				if (state.failures >= catalog.speedPoolLimits.failureDemoteAfter)
-					state.demotedUntil = endedAt + catalog.speedPoolLimits.demoteForMs;
+				if (state.failures >= catalog.poolLimits.failureDemoteAfter)
+					state.demotedUntil = endedAt + catalog.poolLimits.demoteForMs;
 				poolDemotions.set(reservation.member, state);
 			} else {
 				outcome = "success";
@@ -433,6 +478,40 @@ function selectorSuppressed(
 		isSelectorSuppressed?: (selector: string) => boolean;
 	};
 	return registry.isSelectorSuppressed?.(retrySelector(model, effort)) ?? false;
+}
+
+/** On-disk root of the session's `local://` protocol, mirroring OMP's own resolution. */
+function localRoot(ctx: ExtensionContext): string {
+	const options = ctx.localProtocolOptions;
+	const artifacts = options?.getArtifactsDir?.();
+	if (artifacts) return path.resolve(artifacts, "local");
+	const raw = options?.getSessionId?.() ?? "session";
+	const safe = raw.replace(/[^a-zA-Z0-9_.-]/g, "_") || "session";
+	return path.join(os.tmpdir(), "omp-local", safe);
+}
+
+/** The plan document a plan-review brief names: a `local://` path, else an `.md` path in the brief. */
+function planDocumentPath(ctx: ExtensionContext, brief: string): string | undefined {
+	const local = brief.match(/local:\/\/[^\s)"'`]+/);
+	if (local) {
+		const root = path.resolve(localRoot(ctx));
+		const resolved = path.resolve(root, local[0].slice("local://".length));
+		return resolved.startsWith(root) ? resolved : undefined;
+	}
+	const relative = brief.match(/(?:^|[\s(])([\w./~-]*[\w-]\.md)\b/);
+	if (!relative) return undefined;
+	return path.isAbsolute(relative[1]) ? relative[1] : path.resolve(ctx.cwd, relative[1]);
+}
+
+/** Read a plan document's front matter, or undefined when it cannot be located or parsed. */
+function readPlanProvenance(ctx: ExtensionContext, brief: string): PlanProvenance | undefined {
+	const file = planDocumentPath(ctx, brief);
+	if (!file) return undefined;
+	try {
+		return planProvenance(readFileSync(file, "utf8"), catalog.planMetadata);
+	} catch {
+		return undefined;
+	}
 }
 
 export function register(pi: ExtensionAPI): void {
@@ -520,7 +599,8 @@ export function register(pi: ExtensionAPI): void {
 			slot?: string;
 			model?: string;
 			thinking?: string;
-			difficulty?: number;
+			difficulty?: Difficulty;
+			directive?: string;
 			backups?: Array<{ slot: string; model: string; thinking: string }>;
 			rollover?: { from: string; to: string };
 			pool?: PoolRouteReport;
@@ -542,7 +622,7 @@ export function register(pi: ExtensionAPI): void {
 		if (decision.source !== "baseline") {
 			const slot = route.slot ?? decision.choice;
 			const target = route.model || route.thinking ? ` · ${route.model ?? "bound model"}:${route.thinking ?? "default"}` : "";
-			const difficulty = route.difficulty === undefined ? "" : ` · ${DIFFICULTY_NAMES[route.difficulty]}`;
+			const difficulty = route.difficulty === undefined ? "" : ` · ${route.difficulty}`;
 			const confidence =
 				decision.confidence === undefined ? "" : ` · ${Math.round(decision.confidence * 100)}%`;
 			const source = decision.source === "catalog" ? " · fixed" : "";
@@ -584,7 +664,7 @@ export function register(pi: ExtensionAPI): void {
 				return;
 			}
 			ctx.ui.notify(
-				`Auto-agents ${enabled ? "on" : "off"}; Jev ${catalog.jevModel}; ${lastLine ?? "no routing decision yet"}. Chat model unchanged.`,
+				`Auto-agents ${enabled ? "on" : "off"} · catalog v${catalog.version} · Jev ${catalog.jevModel}; ${lastLine ?? "no routing decision yet"}. Chat model unchanged.`,
 				"info",
 			);
 		},
@@ -633,20 +713,38 @@ export function register(pi: ExtensionAPI): void {
 			);
 			return;
 		}
-		const profiles = catalog.profiles.filter(profile => profile.agents.includes(event.agent));
-		if (!profiles.length) {
-			reportSkipped(ctx, event.agent, "no-slot", `Jev skipped · no slot for ${event.agent} · baseline kept`);
+		const pinned = catalog.agents.pinned.includes(event.agent);
+		const covered = catalog.agents.covered.includes(event.agent);
+		if (!pinned && !covered) {
+			reportSkipped(ctx, event.agent, "unknown-agent", `Jev skipped · ${event.agent} · unknown agent · baseline kept`);
 			return;
 		}
-		const state = JSON.stringify({ agent: event.agent, task: event.assignment, context: event.context ?? "" });
+		const solutionSpace = "solutionSpace" in event ? event.solutionSpace : undefined;
+		const state = [
+			JSON.stringify({
+				agent: event.agent,
+				task: event.assignment,
+				context: event.context ?? "",
+				...(typeof solutionSpace === "string" && solutionSpace.trim().length > 0 ? { solutionSpace } : {}),
+			}),
+			"",
+			"Routing guidance:",
+			...catalog.nuances,
+		].join("\n");
 		const withReadiness = (decision: Decision): Decision => {
 			const usage = mergeUsage(readinessUsage, decision.usage);
 			return usage ? { ...decision, usage } : decision;
 		};
+		const available = ctx.models.list();
+		const resolveModel = (spec: string): ModelRef | undefined => {
+			const model = ctx.models.resolve(spec);
+			return model && available.some(candidate => candidate.provider === model.provider && candidate.id === model.id)
+				? model
+				: undefined;
+		};
 
-		// Seat: the agent keeps its bound model; only effort is routed.
-		const seat = profiles.find(profile => profile.model === undefined);
-		if (seat) {
+		// Pinned agents keep their bound model; Jev sets only effort from the model's map.
+		if (pinned) {
 			const pattern = event.patterns[0] ?? (event.modelRole ? `@${event.modelRole}` : undefined);
 			const model = pattern ? ctx.models.resolve(pattern) : undefined;
 			const supported = model ? getSupportedEfforts(model) : [];
@@ -659,18 +757,17 @@ export function register(pi: ExtensionAPI): void {
 				);
 				return;
 			}
-			let decision: Decision = { source: "catalog", reason: "fixed" };
-			let latencyMs = 0;
-			if (effortVaries(seat)) {
-				({ result: decision, latencyMs } = await withJevActivity(ctx, `rating ${event.agent} difficulty`, () =>
-					choose(state, [], true, catalog, evaluator(ctx), event.signal),
-				));
-			}
-			decision = withReadiness(decision);
-			const level = decision.difficulty ?? ORDINARY;
-			const effort = fitEffort(seat.effort[level], supported);
-			if (decision.source === "baseline" || !effort) {
-				reportDecision(ctx, decision, event.agent, { slot: seat.id }, latencyMs);
+			const { result: decision, latencyMs } = await withJevActivity(ctx, `rating ${event.agent} difficulty`, () =>
+				choose(state, [], true, catalog, evaluator(ctx), event.signal),
+			);
+			const merged = withReadiness(decision);
+			const difficulty = merged.difficulty ?? ORDINARY;
+			const effort =
+				merged.source === "baseline"
+					? undefined
+					: effortForModel(catalog, `${model.provider}/${model.id}`, difficulty, undefined, supported);
+			if (!effort) {
+				reportDecision(ctx, merged, event.agent, { slot: "pinned" }, latencyMs);
 				return;
 			}
 			const bound = `${model.provider}/${model.id}`;
@@ -678,179 +775,168 @@ export function register(pi: ExtensionAPI): void {
 				thinkingLevel: thinkingLevel(effort),
 				note: reportDecision(
 					ctx,
-					decision,
+					merged,
 					event.agent,
-					{ slot: seat.id, model: bound, thinking: effort, difficulty: decision.difficulty },
+					{ slot: "pinned", model: bound, thinking: effort, difficulty: merged.difficulty },
 					latencyMs,
 				),
 			};
 		}
 
-		// Model slots: each names a binding; Jev picks the job when several compete.
-		const available = ctx.models.list();
-		const slots = profiles.flatMap(profile => {
-			const model = profile.model ? ctx.models.resolve(profile.model) : undefined;
-			if (!model || !available.some(candidate => candidate.provider === model.provider && candidate.id === model.id)) return [];
-			const backups = (profile.backups ?? []).flatMap(backupId => {
-				const backupProfile = catalog.profiles.find(candidate => candidate.id === backupId);
-				const backupModel = backupProfile?.model ? ctx.models.resolve(backupProfile.model) : undefined;
-				return backupProfile &&
-					backupModel &&
-					available.some(candidate => candidate.provider === backupModel.provider && candidate.id === backupModel.id)
-					? [{ profile: backupProfile, model: backupModel }]
-					: [];
-			});
-			return [{ profile, model, backups }];
-		});
-		if (!slots.length) {
-			reportSkipped(ctx, event.agent, "no-bound-model", `Jev unavailable · no bound model for ${event.agent} · baseline kept`);
-			return;
+		// Covered agents: directive > pool > fixed task-type model > bound model.
+		const directive = parseDirective(event.assignment);
+		let directiveModel: string | undefined;
+		let directiveRole: string | undefined;
+		let directiveEffort: Effort | undefined;
+		let directiveTaskType: string | undefined;
+		if (directive) {
+			const alias = catalog.directiveTargets[directive.target];
+			if (alias) {
+				directiveModel = alias;
+				directiveRole = directive.target;
+			} else if (isLiteralModel(directive.target)) {
+				directiveModel = directive.target;
+				directiveRole = directive.target;
+			} else if (directive.target in catalog.taskTypes) {
+				directiveTaskType = directive.target;
+			}
+			directiveEffort = directive.effort;
 		}
-		const rate = slots.some(({ profile }) => effortVaries(profile));
+
+		let taskTypeName = directiveTaskType;
+		const needsTaskChoice = directiveModel === undefined && taskTypeName === undefined;
+		const candidates = needsTaskChoice ? Object.keys(catalog.taskTypes) : [];
+		if (needsTaskChoice && candidates.length === 1) taskTypeName = candidates[0];
+
 		let decision: Decision = { source: "catalog", reason: "fixed" };
 		let latencyMs = 0;
-		const rankBackups = slots.some(({ backups }) => backups.length > 1);
-		if (slots.length > 1 || rate || rankBackups) {
-			const offered = slots.map(({ profile, backups }) => ({
-				id: profile.id,
-				description: profile.description,
-				...(backups.length
-					? { backups: backups.map(({ profile: backup }) => ({ id: backup.id, description: backup.description })) }
-					: {}),
-			}));
-			const activity = slots.length > 1
-				? `classifying ${slots.length} ${event.agent} slots`
-				: rankBackups
-					? `ranking ${event.agent} backups`
-					: `rating ${event.agent} difficulty`;
+		const offered =
+			needsTaskChoice && candidates.length > 1
+				? candidates.map(name => ({ id: name, description: catalog.taskTypes[name].description }))
+				: [];
+		const rateDifficulty = directiveModel
+			? directiveEffort === undefined
+			: taskTypeName !== undefined
+				? taskTypeEffortVaries(catalog, taskTypeName)
+				: candidates.some(name => taskTypeEffortVaries(catalog, name));
+		if (offered.length > 1 || rateDifficulty) {
 			({ result: decision, latencyMs } = await withJevActivity(
 				ctx,
-				activity,
-				() => choose(state, offered, rate, catalog, evaluator(ctx), event.signal),
+				offered.length > 1 ? `classifying ${event.agent} task type` : `rating ${event.agent} difficulty`,
+				() => choose(state, offered, rateDifficulty, catalog, evaluator(ctx), event.signal),
 			));
 		}
 		decision = withReadiness(decision);
-		const selected = slots.length === 1 ? slots[0] : slots.find(({ profile }) => profile.id === decision.choice);
-		if (decision.source === "baseline" || !selected) {
+		if (needsTaskChoice && candidates.length > 1) {
+			if (decision.source === "baseline") {
+				reportDecision(ctx, decision, event.agent, {}, latencyMs);
+				return;
+			}
+			taskTypeName = decision.choice;
+		}
+		if (taskTypeName === undefined && directiveModel === undefined) {
 			reportDecision(ctx, decision, event.agent, {}, latencyMs);
 			return;
 		}
-		const exact = `${selected.model.provider}/${selected.model.id}`;
 		const difficulty = decision.difficulty ?? ORDINARY;
-		const effort = fitEffort(selected.profile.effort[difficulty], getSupportedEfforts(selected.model));
-		const byBackupId = new Map(selected.backups.map(backup => [backup.profile.id, backup]));
-		const order = decision.backupOrder?.[selected.profile.id] ?? selected.backups.map(backup => backup.profile.id);
-		const backupRoutes = order.flatMap(id => {
-			const backup = byBackupId.get(id);
-			if (!backup) return [];
-			const backupEffort = fitEffort(
-				backup.profile.effort[difficulty],
-				getSupportedEfforts(backup.model),
-			);
-			if (!backupEffort) return [];
-			return [
-				{
-					slot: backup.profile.id,
-					model: backup.model,
-					exact: `${backup.model.provider}/${backup.model.id}`,
-					effort: backupEffort,
-				},
-			];
-		});
-		const selectedRoute: RouteOption = { slot: selected.profile.id, model: selected.model, exact, effort };
-		const poolMembers: PoolMember[] = [];
-		const poolRoutes: RouteOption[] = [];
-		const demotedPoolRoutes: RouteOption[] = [];
+		const boundPattern = event.patterns[0] ?? (event.modelRole ? `@${event.modelRole}` : undefined);
+		const boundModel = boundPattern ? ctx.models.resolve(boundPattern) : undefined;
+		const attempts: RouteOption[] = [];
+		let poolMembers: PoolMember[] = [];
 		let poolRoute: PoolRouteReport | undefined;
-		if (selected.profile.speedPool) {
-			const poolUsage = await fetchPoolUsage(ctx, event.signal);
-			const nowMs = Date.now();
-			for (const configured of selected.profile.speedPool) {
-				const poolProfile = catalog.profiles.find(profile => profile.id === configured.id);
-				const poolModel = poolProfile?.model ? ctx.models.resolve(poolProfile.model) : undefined;
-				if (
-					!poolProfile ||
-					!poolModel ||
-					!available.some(candidate => candidate.provider === poolModel.provider && candidate.id === poolModel.id)
-				)
-					continue;
-				const poolEffort = fitEffort(poolProfile.effort[difficulty], getSupportedEfforts(poolModel));
-				if (!poolEffort) continue;
-				const counter = counterForModel(poolModel, poolUsage?.reports ?? []);
-				poolMembers.push({
-					...configured,
-					model: { provider: poolModel.provider, id: poolModel.id },
-					effort: poolEffort,
-					...(counter !== undefined ? { counter } : {}),
-					penaltyKind: poolModel.provider === "xai-oauth" ? "weekly" : "short",
+		let planNote = "";
+		const optionForModel = (spec: string, range: EffortRange | undefined, pinnedEffort?: Effort): RouteOption | undefined => {
+			const model = resolveModel(spec);
+			if (!model) return undefined;
+			const exact = `${model.provider}/${model.id}`;
+			const supported = getSupportedEfforts(model);
+			const effort = pinnedEffort
+				? fitEffort(capEffort(exact, pinnedEffort), supported)
+				: effortForModel(catalog, exact, difficulty, range, supported);
+			return effort ? { slot: spec, model, exact, effort } : undefined;
+		};
+		const pushUnique = (option: RouteOption | undefined) => {
+			if (option && !attempts.some(existing => existing.exact === option.exact)) attempts.push(option);
+		};
+
+		if (directiveModel) {
+			pushUnique(optionForModel(directiveModel, undefined, directiveEffort));
+		} else {
+			const taskType = catalog.taskTypes[taskTypeName as string];
+			if (taskType.pool) {
+				const pool = catalog.pools[taskType.pool];
+				poolMembers = pool.members.flatMap(spec => {
+					const model = resolveModel(spec.model);
+					if (!model) return [];
+					const counter = counterForModel(model, []);
+					return [
+						{
+							id: spec.id ?? `${model.provider}/${model.id}`,
+							model,
+							...(spec.effort !== undefined ? { effort: spec.effort } : {}),
+							...(spec.difficulties !== undefined ? { difficulties: spec.difficulties } : {}),
+							...(spec.maxShortUsed !== undefined ? { maxShortUsed: spec.maxShortUsed } : {}),
+							...(spec.minWeeklyHeadroom !== undefined ? { minWeeklyHeadroom: spec.minWeeklyHeadroom } : {}),
+							...(spec.minMonthlyHeadroom !== undefined ? { minMonthlyHeadroom: spec.minMonthlyHeadroom } : {}),
+							...(counter !== undefined ? { counter } : {}),
+							penaltyKind: model.provider === "xai-oauth" ? ("weekly" as const) : ("short" as const),
+						} satisfies PoolMember,
+					];
 				});
-			}
-			if (!poolUsage) {
-				poolRoute = { status: "no-usage" };
-			} else {
-				const penalties = poolPenalties(poolMembers, poolUsage, nowMs);
-				const rank = rankPool(
-					poolMembers,
-					poolUsage,
-					penalties,
-					activeDemotions(nowMs),
-					catalog.speedPoolLimits,
-					nowMs,
+				const scoped = poolMembers.filter(
+					member => member.difficulties === undefined || member.difficulties.includes(difficulty),
 				);
-				const poolById = new Map(poolMembers.map(member => [member.id, member]));
-				const routeForMember = (id: string) => {
-					const member = poolById.get(id);
-					if (!member) return undefined;
-					const poolProfile = selected.profile.speedPool?.find(configured => configured.id === id);
-					const poolCatalogProfile = catalog.profiles.find(profile => profile.id === id);
-					const poolModel = poolProfile && poolCatalogProfile?.model ? ctx.models.resolve(poolCatalogProfile.model) : undefined;
-					if (!poolCatalogProfile || !poolModel) return undefined;
-					const poolEffort = fitEffort(poolCatalogProfile.effort[difficulty], getSupportedEfforts(poolModel));
-					if (!poolEffort) return undefined;
-					return { slot: id, model: poolModel, exact: `${poolModel.provider}/${poolModel.id}`, effort: poolEffort };
-				};
-				for (const id of rank.order) {
-					const route = routeForMember(id);
-					if (route) poolRoutes.push(route);
+				let ordered = scoped;
+				if (pool.excludePlanAuthors) {
+					const provenance = readPlanProvenance(ctx, event.assignment);
+					const preference = preferPlanReviewMembers(scoped, provenance);
+					ordered = preference.members;
+					if (preference.unknown) planNote = " · plan author unknown";
+					else if (preference.excluded.length)
+						planNote = ` · plan authors excluded ${preference.excluded.join(", ")}`;
 				}
-				for (const id of rank.demoted) {
-					const route = routeForMember(id);
-					if (route) demotedPoolRoutes.push(route);
+				const usage = await fetchPoolUsage(ctx, event.signal);
+				const byId = new Map(ordered.map(member => [member.id, member]));
+				const nowMs = Date.now();
+				const rank = usage
+					? rankPool(ordered, usage, poolPenalties(scoped, usage, nowMs), activeDemotions(nowMs), catalog.poolLimits, nowMs)
+					: undefined;
+				poolRoute = rank
+					? { order: [], skipped: rank.skipped, demoted: rank.demoted, verdicts: rank.verdicts }
+					: { status: "no-usage" };
+				const orderIds = rank ? rank.order : ordered.map(member => member.id);
+				for (const id of orderIds) {
+					const member = byId.get(id);
+					if (!member) continue;
+					const modelId = `${member.model.provider}/${member.model.id}`;
+					const supported = getSupportedEfforts(member.model);
+					const effort = member.effort
+						? fitEffort(capEffort(modelId, member.effort), supported)
+						: effortForModel(catalog, modelId, difficulty, taskType.effort, supported);
+					if (effort) pushUnique({ slot: id, model: member.model, exact: modelId, effort });
 				}
-				const skipped = new Set(rank.skipped);
-				const filteredBackups = backupRoutes.filter(route => !skipped.has(route.slot));
-				backupRoutes.splice(0, backupRoutes.length, ...filteredBackups);
-				poolRoute = {
-					order: [],
-					skipped: rank.skipped,
-					demoted: rank.demoted,
-					verdicts: rank.verdicts,
-				};
+				if (!attempts.length) pushUnique(optionForModel(pool.fallback.model, taskType.effort, pool.fallback.effort));
+			} else if (taskType.model) {
+				pushUnique(optionForModel(taskType.model, taskType.effort));
+				for (const backup of taskType.backups ?? []) pushUnique(optionForModel(backup, taskType.effort));
+			} else if (boundModel) {
+				pushUnique(optionForModel(`${boundModel.provider}/${boundModel.id}`, taskType.effort));
 			}
 		}
-		const assembled =
-			selected.profile.speedPoolPlacement === "before"
-				? [...poolRoutes, selectedRoute, ...demotedPoolRoutes, ...backupRoutes]
-				: [selectedRoute, ...poolRoutes, ...backupRoutes, ...demotedPoolRoutes];
-		const seen = new Set<string>();
-		const attemptOrder = assembled.filter(option => {
-			if (seen.has(option.exact)) return false;
-			seen.add(option.exact);
-			return true;
-		});
-		let firstUnblocked = 0;
-		if (selectorSuppressed(ctx, attemptOrder[0].model, attemptOrder[0].effort)) {
-			const candidate = attemptOrder.findIndex(option => !selectorSuppressed(ctx, option.model, option.effort));
-			if (candidate >= 0) firstUnblocked = candidate;
+		if (!attempts.length) {
+			reportDecision(ctx, decision, event.agent, {}, latencyMs);
+			return;
 		}
+		const firstUnblocked = selectorSuppressed(ctx, attempts[0].model, attempts[0].effort)
+			? Math.max(0, attempts.findIndex(option => !selectorSuppressed(ctx, option.model, option.effort)))
+			: 0;
 		const rolledOver = firstUnblocked > 0;
-		const active = attemptOrder[firstUnblocked];
-		const routedBackups = rolledOver ? attemptOrder.slice(firstUnblocked + 1) : attemptOrder.slice(1);
-		const model = [active.exact, ...routedBackups.map(option => `${option.exact}:${option.effort}`)];
-		const backups = backupRoutes.map(option => ({ slot: option.slot, model: option.exact, thinking: option.effort }));
+		const active = attempts[firstUnblocked];
+		const rest = rolledOver ? attempts.slice(firstUnblocked + 1) : attempts.slice(1);
+		const model = [active.exact, ...rest.map(option => `${option.exact}:${option.effort}`)];
 		if (poolRoute) {
 			poolRoute.active = active.exact;
-			poolRoute.order = attemptOrder.map(option => option.exact);
+			poolRoute.order = attempts.map(option => option.exact);
 		}
 		const activePoolMember = poolMembers.find(member => `${member.model.provider}/${member.model.id}` === active.exact);
 		if (activePoolMember) {
@@ -860,21 +946,22 @@ export function register(pi: ExtensionAPI): void {
 		return {
 			model,
 			thinkingLevel: active.effort ? thinkingLevel(active.effort) : ThinkingLevel.Off,
-			note: reportDecision(
-				ctx,
-				decision,
-				event.agent,
-				{
-					slot: selected.profile.id,
-					model: exact,
-					thinking: effort ?? "off",
-					difficulty: decision.difficulty,
-					backups,
-					pool: poolRoute,
-					...(rolledOver ? { rollover: { from: selected.profile.id, to: active.slot } } : {}),
-				},
-				latencyMs,
-			),
+			note:
+				reportDecision(
+					ctx,
+					decision,
+					event.agent,
+					{
+						slot: taskTypeName ?? "bound",
+						model: active.exact,
+						thinking: active.effort ?? "off",
+						difficulty: decision.difficulty,
+						...(directive ? { directive: directive.span } : {}),
+						...(poolRoute ? { pool: poolRoute } : {}),
+						...(rolledOver ? { rollover: { from: attempts[0].exact, to: active.slot } } : {}),
+					},
+					latencyMs,
+				) + planNote,
 		};
 	});
 }

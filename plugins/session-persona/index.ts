@@ -1,12 +1,15 @@
-// Session persona cycle (Alt+O / /orch): normal → orchestrate → brute.
+// Session persona: /persona, /normal, /orchestrate, /brute, and a cycle hotkey
+// (default Ctrl+Alt+P) for normal → orchestrate → brute.
 // Independent of the Ctrl+P model cycle.
 // Replaces the SYSTEM.md customPrompt slot. APPEND_SYSTEM.md stays.
 
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { basename, dirname, extname, join } from "node:path";
+import { basename, dirname, extname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { JSONC, YAML } from "bun";
 import type { ExtensionAPI, ExtensionContext } from "@oh-my-pi/pi-coding-agent";
+import type { AutocompleteItem, KeyId } from "@oh-my-pi/pi-tui";
 
 type SessionMode = "normal" | "orchestrate" | "brute";
 
@@ -38,6 +41,64 @@ const CONSTITUTION_END = "</personality>";
 const MODE_FINGERPRINT: Record<Exclude<SessionMode, "normal">, string> = {
 	orchestrate: "Dispatcher for this Oh My Pi session. Specialists do the work. You do not.",
 	brute: "Execute the user's asked action in this Oh My Pi session.",
+};
+
+// Read from OMP's own keybindings file; OMP's loader keeps unknown ids and skips them.
+const CYCLE_KEYBINDING = "sessionPersona.cycle";
+const DEFAULT_CYCLE_KEYS = ["ctrl+alt+p"];
+// Same lookup order as OMP's keybindings loader: the first file that exists wins.
+const KEYBINDING_FILES = ["keybindings.yml", "keybindings.yaml", "keybindings.json"];
+const MODIFIER_ORDER = ["ctrl", "shift", "alt", "super"];
+const KEY_ALIASES: Record<string, string> = { esc: "escape", return: "enter" };
+const NAMED_KEYS: Record<string, true> = {
+	escape: true,
+	enter: true,
+	tab: true,
+	space: true,
+	backspace: true,
+	delete: true,
+	insert: true,
+	clear: true,
+	home: true,
+	end: true,
+	pageup: true,
+	pagedown: true,
+	up: true,
+	down: true,
+	left: true,
+	right: true,
+	f1: true,
+	f2: true,
+	f3: true,
+	f4: true,
+	f5: true,
+	f6: true,
+	f7: true,
+	f8: true,
+	f9: true,
+	f10: true,
+	f11: true,
+	f12: true,
+};
+const SYMBOL_KEYS = "`-=[]\\;',./!@#$%^&*()_+|~{}:<>?";
+// OMP's ExtensionRunner silently drops extension shortcuts on these chords.
+const RESERVED_KEYS: Record<string, true> = {
+	"ctrl+c": true,
+	"ctrl+d": true,
+	"ctrl+z": true,
+	"ctrl+k": true,
+	"ctrl+p": true,
+	"ctrl+l": true,
+	"ctrl+o": true,
+	"ctrl+t": true,
+	"ctrl+g": true,
+	"alt+m": true,
+	"ctrl+q": true,
+	"shift+tab": true,
+	"ctrl+shift+p": true,
+	"alt+enter": true,
+	escape: true,
+	enter: true,
 };
 
 interface PendingMode {
@@ -211,11 +272,115 @@ function queuePendingMode(
 	else registry.pendingMode.set(key, [entry]);
 }
 
+function applyMode(ctx: ExtensionContext, mode: SessionMode): void {
+	setMode(sessionId(ctx), mode);
+	if (ctx.hasUI) ctx.ui.notify(MODE_NOTIFY[mode], "info");
+}
+
 function cycle(ctx: ExtensionContext): void {
-	const id = sessionId(ctx);
-	const next = CYCLE[(CYCLE.indexOf(getMode(id)) + 1) % CYCLE.length];
-	setMode(id, next);
-	if (ctx.hasUI) ctx.ui.notify(MODE_NOTIFY[next], "info");
+	applyMode(ctx, CYCLE[(CYCLE.indexOf(getMode(sessionId(ctx))) + 1) % CYCLE.length]);
+}
+
+function isSessionMode(value: string): value is SessionMode {
+	return (CYCLE as string[]).includes(value);
+}
+
+function personaCompletions(prefix: string): AutocompleteItem[] | null {
+	const typed = prefix.trim().toLowerCase();
+	const items = CYCLE.filter((mode) => mode.startsWith(typed)).map((mode) => ({
+		value: mode,
+		label: mode,
+		description: MODE_NOTIFY[mode],
+	}));
+	return items.length > 0 ? items : null;
+}
+
+type ChordResult = { key: string } | { error: string };
+
+// Mirrors OMP's canonical key ids: lowercase, modifiers ordered ctrl, shift, alt, super.
+function parseChord(raw: string): ChordResult {
+	const chord = raw.replace(/\s+/g, "").toLowerCase();
+	const parts = chord.endsWith("++") ? [...chord.slice(0, -2).split("+"), "+"] : chord.split("+");
+	const last = parts.pop() ?? "";
+	const base = KEY_ALIASES[last] ?? last;
+	const validBase = base.length === 1 ? /[a-z0-9]/.test(base) || SYMBOL_KEYS.includes(base) : NAMED_KEYS[base] === true;
+	if (!validBase || parts.some((part) => !MODIFIER_ORDER.includes(part)) || new Set(parts).size !== parts.length) {
+		return { error: "not a key chord OMP understands, such as ctrl+alt+p" };
+	}
+	if (!/^f\d+$/.test(base) && !parts.some((part) => part !== "shift")) {
+		return { error: "needs ctrl, alt, or super, or it would capture normal typing" };
+	}
+	parts.sort((a, b) => MODIFIER_ORDER.indexOf(a) - MODIFIER_ORDER.indexOf(b));
+	const key = [...parts, base].join("+");
+	if (RESERVED_KEYS[key]) return { error: "reserved by OMP, which ignores extension shortcuts on it" };
+	return { key };
+}
+
+function formatChord(key: string): string {
+	return key
+		.split(/\+(?!$)/)
+		.map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+		.join("+");
+}
+
+// Mirrors OMP's agent-dir resolution: a named profile reads its own agent dir and
+// inherits the default profile's file beneath it; otherwise PI_CODING_AGENT_DIR wins.
+function keybindingDirs(): string[] {
+	const root = join(homedir(), process.env.PI_CONFIG_DIR || ".omp");
+	const defaultDir = join(root, "agent");
+	const profile = (process.env.OMP_PROFILE || process.env.PI_PROFILE)?.trim();
+	if (profile && profile !== "default") return [defaultDir, join(root, "profiles", profile, "agent")];
+	const override = process.env.PI_CODING_AGENT_DIR;
+	return [override ? resolve(override) : defaultDir];
+}
+
+interface CycleKeys {
+	keys: string[];
+	notices: string[];
+}
+
+function loadCycleKeys(): CycleKeys {
+	const notices: string[] = [];
+	let entry: unknown;
+	let source: string | undefined;
+	for (const dir of keybindingDirs()) {
+		const path = KEYBINDING_FILES.map((name) => join(dir, name)).find((candidate) => existsSync(candidate));
+		if (!path) continue;
+		let config: unknown;
+		try {
+			const text = readFileSync(path, "utf8");
+			config = path.endsWith(".json") ? JSONC.parse(text) : YAML.parse(text);
+		} catch (err) {
+			notices.push(`session-persona: cannot read ${path}: ${err instanceof Error ? err.message : String(err)}`);
+			continue;
+		}
+		if (!config || typeof config !== "object") continue;
+		const value = (config as Record<string, unknown>)[CYCLE_KEYBINDING];
+		if (value === undefined || value === null) continue;
+		entry = value;
+		source = path;
+	}
+	if (source === undefined) return { keys: DEFAULT_CYCLE_KEYS, notices };
+	const list = typeof entry === "string" ? [entry] : Array.isArray(entry) ? entry : undefined;
+	if (!list) {
+		notices.push(
+			`session-persona: ${CYCLE_KEYBINDING} in ${source} must be a chord or a list of chords; using ${formatChord(DEFAULT_CYCLE_KEYS[0])}.`,
+		);
+		return { keys: DEFAULT_CYCLE_KEYS, notices };
+	}
+	const keys: string[] = [];
+	for (const item of list) {
+		const result: ChordResult = typeof item === "string" ? parseChord(item) : { error: "not a string" };
+		if ("error" in result) {
+			notices.push(`session-persona: ignoring ${JSON.stringify(item)} for ${CYCLE_KEYBINDING} in ${source}: ${result.error}.`);
+		} else if (!keys.includes(result.key)) {
+			keys.push(result.key);
+		}
+	}
+	if (list.length > 0 && keys.length === 0) {
+		notices.push("session-persona: no valid persona hotkey is bound; /persona still works.");
+	}
+	return { keys, notices };
 }
 
 
@@ -270,16 +435,39 @@ function spliceMode(systemPrompt: string[], target: Exclude<SessionMode, "normal
 
 export default function sessionPersona(pi: ExtensionAPI): void {
 	getRegistry();
-	pi.registerShortcut("alt+o", {
-		description: "Cycle session persona: normal → orchestrate → brute",
-		handler: cycle,
-	});
+	const { keys, notices } = loadCycleKeys();
+	for (const key of keys) {
+		pi.registerShortcut(key as KeyId, {
+			description: `Cycle session persona: normal → orchestrate → brute (${formatChord(key)})`,
+			handler: cycle,
+		});
+	}
+	const hotkeys = keys.length > 0 ? ` (${keys.map(formatChord).join(", ")})` : "";
 
-	pi.registerCommand("orch", {
-		description: "Cycle session persona: normal → orchestrate → brute (Alt+O)",
-		handler: async (_args, ctx) => {
-			cycle(ctx);
+	pi.registerCommand("persona", {
+		description: `Cycle the session persona, or set one: /persona [normal|orchestrate|brute]${hotkeys}`,
+		getArgumentCompletions: personaCompletions,
+		handler: async (args, ctx) => {
+			const name = args.trim().toLowerCase();
+			if (name === "") cycle(ctx);
+			else if (isSessionMode(name)) applyMode(ctx, name);
+			else if (ctx.hasUI) {
+				ctx.ui.notify(`Unknown persona "${args.trim()}". Valid personas: ${CYCLE.join(", ")}.`, "warning");
+			}
 		},
+	});
+	for (const mode of CYCLE) {
+		pi.registerCommand(mode, {
+			description: `Set the session persona to ${mode}`,
+			handler: async (_args, ctx) => {
+				applyMode(ctx, mode);
+			},
+		});
+	}
+
+	pi.on("session_start", (_event, ctx) => {
+		if (!ctx.hasUI) return;
+		for (const notice of notices.splice(0)) ctx.ui.notify(notice, "warning");
 	});
 
 	pi.on("tool_call", (event, ctx) => {
