@@ -1,5 +1,5 @@
 {
-	"version": 8,
+	"version": 9,
 	"enabled": true,
 	"timeoutMs": 2000,
 	"maxInputBytes": 24000,
@@ -40,12 +40,12 @@
 	},
 	"nuances": [
 		"Rate difficulty from the work itself, not from the brief's length or tone.",
-		"A brief that asks to investigate but already names the fix is grunt, not lead.",
-		"Reviewing an implemented diff against a settled spec is grunt; judging whether the design itself is right is lead.",
+		"A brief that asks to investigate but already names the fix is code, not lead.",
+		"Reviewing an implemented diff against a settled spec is review; judging whether the design itself is right is lead.",
 		"Git work that rewrites history, resolves conflicts, or touches a shared branch rates hard; a routine commit of reviewed changes rates exact.",
-		"Sonnet above low costs about as much as Opus low and does worse, so never raise difficulty to buy Sonnet more effort; the grunt pool already sends anything above exact to Opus low.",
-		"Deepseek 4.1 Flash always runs at low reasoning, no matter the resolved difficulty",
-		"Gemini 3.8 Flash is good at orchestrating, not great as a grunt subagent. Use for orchestrator roles and vision only"
+		"Sonnet above low costs about as much as Opus low and does worse, so never raise difficulty to buy Sonnet more effort; harder work already moves to Opus or Grok.",
+		"Gemini 3.8 Flash is good at orchestrating, not great as a worker subagent. Use for orchestrator roles and vision only",
+		"Rate exact only when the worker reads a few named files or one short tool output and makes a small, fully specified change; a brief that needs broad reading, many files, long logs, or any judgment is at least ordinary. Exact work may run on a fast model with little reasoning depth."
 	],
 	"models": {
 		"anthropic/claude-opus-5-5": {
@@ -87,6 +87,20 @@
 			"hard": "high",
 			"critical": "xhigh"
 		},
+		"anthropic/claude-haiku-5-5": {
+			"supports": [
+				"low",
+				"medium",
+				"high",
+				"xhigh",
+				"max"
+			],
+			"maxEffort": "xhigh",
+			"exact": "xhigh",
+			"ordinary": "xhigh",
+			"hard": "xhigh",
+			"critical": "xhigh"
+		},
 		"anthropic/claude-sonnet-5-5": {
 			"supports": [
 				"low",
@@ -113,17 +127,6 @@
 			"hard": "high",
 			"critical": "high"
 		},
-		"surplus/deepseek-v4.1-flash": {
-			"supports": [
-				"low",
-				"high",
-				"max"
-			],
-			"exact": "low",
-			"ordinary": "low",
-			"hard": "low",
-			"critical": "low"
-		},
 		"*": {
 			"exact": "low",
 			"ordinary": "medium",
@@ -133,8 +136,6 @@
 	},
 	"reviewOnly": {
 		"models": [
-			"openai-codex/gpt-6.1-sol",
-			"openai-codex/gpt-5.6-luna",
 			"@frontier-2",
 			"@slow2",
 			"@advisor",
@@ -166,30 +167,305 @@
 		"mechanical": {
 			"members": [
 				{
+					"model": "@fast",
+					"effort": "xhigh",
+					"difficulties": [
+						"exact",
+						"ordinary"
+					],
+					"maxShortUsed": 0.7,
+					"minWeeklyHeadroom": 0.1
+				},
+				{
 					"model": "@frontier-3",
 					"effort": "low",
+					"difficulties": [
+						"exact",
+						"ordinary"
+					],
 					"minWeeklyHeadroom": 0.05,
 					"minMonthlyHeadroom": 0
 				},
 				{
+					"model": "openai-codex/gpt-5.6-luna",
+					"effort": "xhigh",
+					"difficulties": [
+						"exact",
+						"ordinary"
+					],
+					"maxShortUsed": 0.7,
+					"minWeeklyHeadroom": 0.1
+				},
+				{
 					"model": "anthropic/claude-sonnet-5-5",
 					"effort": "low",
+					"difficulties": [
+						"hard"
+					],
+					"maxShortUsed": 0.7,
+					"minWeeklyHeadroom": 0.1
+				},
+				{
+					"model": "@frontier-3",
+					"effort": "high",
+					"difficulties": [
+						"hard"
+					],
+					"minWeeklyHeadroom": 0.05,
+					"minMonthlyHeadroom": 0
+				},
+				{
+					"model": "openai-codex/gpt-5.6-luna",
+					"effort": "max",
+					"difficulties": [
+						"hard"
+					],
+					"maxShortUsed": 0.7,
+					"minWeeklyHeadroom": 0.1
+				},
+				{
+					"model": "@frontier-1",
+					"effort": "medium",
+					"difficulties": [
+						"critical"
+					],
+					"maxShortUsed": 0.7,
+					"minWeeklyHeadroom": 0.1
+				},
+				{
+					"model": "@frontier-3",
+					"effort": "high",
+					"difficulties": [
+						"critical"
+					],
+					"minWeeklyHeadroom": 0.05,
+					"minMonthlyHeadroom": 0
+				},
+				{
+					"model": "openai-codex/gpt-5.6-luna",
+					"effort": "max",
+					"difficulties": [
+						"critical"
+					],
 					"maxShortUsed": 0.7,
 					"minWeeklyHeadroom": 0.1
 				}
 			],
 			"fallback": {
-				"model": "@grunt",
+				"model": "@frontier-1",
 				"effort": "low"
 			}
 		},
-		"grunt": {
+		"commit": {
 			"members": [
 				{
+					"model": "@fast",
+					"effort": "xhigh",
+					"difficulties": [
+						"exact",
+						"ordinary"
+					],
+					"maxShortUsed": 0.7,
+					"minWeeklyHeadroom": 0.1
+				},
+				{
 					"model": "@frontier-3",
+					"effort": "low",
+					"difficulties": [
+						"exact",
+						"ordinary"
+					],
 					"minWeeklyHeadroom": 0.05,
 					"minMonthlyHeadroom": 0
 				},
+				{
+					"model": "openai-codex/gpt-5.6-luna",
+					"effort": "xhigh",
+					"difficulties": [
+						"exact",
+						"ordinary"
+					],
+					"maxShortUsed": 0.7,
+					"minWeeklyHeadroom": 0.1
+				},
+				{
+					"model": "@frontier-1",
+					"effort": "low",
+					"difficulties": [
+						"hard"
+					],
+					"maxShortUsed": 0.7,
+					"minWeeklyHeadroom": 0.1
+				},
+				{
+					"model": "@frontier-3",
+					"effort": "high",
+					"difficulties": [
+						"hard"
+					],
+					"minWeeklyHeadroom": 0.05,
+					"minMonthlyHeadroom": 0
+				},
+				{
+					"model": "openai-codex/gpt-5.6-luna",
+					"effort": "max",
+					"difficulties": [
+						"hard"
+					],
+					"maxShortUsed": 0.7,
+					"minWeeklyHeadroom": 0.1
+				},
+				{
+					"model": "@frontier-1",
+					"effort": "medium",
+					"difficulties": [
+						"critical"
+					],
+					"maxShortUsed": 0.7,
+					"minWeeklyHeadroom": 0.1
+				},
+				{
+					"model": "@frontier-3",
+					"effort": "xhigh",
+					"difficulties": [
+						"critical"
+					],
+					"minWeeklyHeadroom": 0.05,
+					"minMonthlyHeadroom": 0
+				},
+				{
+					"model": "openai-codex/gpt-5.6-luna",
+					"effort": "max",
+					"difficulties": [
+						"critical"
+					],
+					"maxShortUsed": 0.7,
+					"minWeeklyHeadroom": 0.1
+				}
+			],
+			"fallback": {
+				"model": "@frontier-1",
+				"effort": "low"
+			}
+		},
+		"code": {
+			"members": [
+				{
+					"model": "@fast",
+					"effort": "xhigh",
+					"difficulties": [
+						"exact"
+					],
+					"maxShortUsed": 0.7,
+					"minWeeklyHeadroom": 0.1
+				},
+				{
+					"model": "@frontier-3",
+					"effort": "low",
+					"difficulties": [
+						"exact"
+					],
+					"minWeeklyHeadroom": 0.05,
+					"minMonthlyHeadroom": 0
+				},
+				{
+					"model": "openai-codex/gpt-5.6-luna",
+					"effort": "max",
+					"difficulties": [
+						"exact"
+					],
+					"maxShortUsed": 0.7,
+					"minWeeklyHeadroom": 0.1
+				},
+				{
+					"model": "anthropic/claude-sonnet-5-5",
+					"effort": "low",
+					"difficulties": [
+						"ordinary"
+					],
+					"maxShortUsed": 0.7,
+					"minWeeklyHeadroom": 0.1
+				},
+				{
+					"model": "@frontier-3",
+					"effort": "high",
+					"difficulties": [
+						"ordinary"
+					],
+					"minWeeklyHeadroom": 0.05,
+					"minMonthlyHeadroom": 0
+				},
+				{
+					"model": "openai-codex/gpt-5.6-luna",
+					"effort": "max",
+					"difficulties": [
+						"ordinary"
+					],
+					"maxShortUsed": 0.7,
+					"minWeeklyHeadroom": 0.1
+				},
+				{
+					"model": "@frontier-1",
+					"effort": "medium",
+					"difficulties": [
+						"hard"
+					],
+					"maxShortUsed": 0.7,
+					"minWeeklyHeadroom": 0.1
+				},
+				{
+					"model": "@frontier-3",
+					"effort": "high",
+					"difficulties": [
+						"hard"
+					],
+					"minWeeklyHeadroom": 0.05,
+					"minMonthlyHeadroom": 0
+				},
+				{
+					"model": "openai-codex/gpt-6.1-sol",
+					"effort": "low",
+					"difficulties": [
+						"hard"
+					],
+					"maxShortUsed": 0.7,
+					"minWeeklyHeadroom": 0.1
+				},
+				{
+					"model": "@frontier-1",
+					"effort": "high",
+					"difficulties": [
+						"critical"
+					],
+					"maxShortUsed": 0.7,
+					"minWeeklyHeadroom": 0.1
+				},
+				{
+					"model": "@frontier-3",
+					"effort": "xhigh",
+					"difficulties": [
+						"critical"
+					],
+					"minWeeklyHeadroom": 0.05,
+					"minMonthlyHeadroom": 0
+				},
+				{
+					"model": "openai-codex/gpt-6.1-sol",
+					"effort": "medium",
+					"difficulties": [
+						"critical"
+					],
+					"maxShortUsed": 0.7,
+					"minWeeklyHeadroom": 0.1
+				}
+			],
+			"fallback": {
+				"model": "@frontier-1",
+				"effort": "low"
+			}
+		},
+		"review": {
+			"members": [
 				{
 					"model": "anthropic/claude-sonnet-5-5",
 					"effort": "low",
@@ -200,14 +476,107 @@
 					"minWeeklyHeadroom": 0.1
 				},
 				{
-					"model": "@lead",
+					"model": "@frontier-3",
 					"effort": "low",
+					"difficulties": [
+						"exact"
+					],
+					"minWeeklyHeadroom": 0.05,
+					"minMonthlyHeadroom": 0
+				},
+				{
+					"model": "openai-codex/gpt-6.1-sol",
+					"effort": "low",
+					"difficulties": [
+						"exact"
+					],
+					"maxShortUsed": 0.7,
+					"minWeeklyHeadroom": 0.1
+				},
+				{
+					"model": "anthropic/claude-sonnet-5-5",
+					"effort": "low",
+					"difficulties": [
+						"ordinary"
+					],
+					"maxShortUsed": 0.7,
+					"minWeeklyHeadroom": 0.1
+				},
+				{
+					"model": "@frontier-3",
+					"effort": "high",
+					"difficulties": [
+						"ordinary"
+					],
+					"minWeeklyHeadroom": 0.05,
+					"minMonthlyHeadroom": 0
+				},
+				{
+					"model": "openai-codex/gpt-6.1-sol",
+					"effort": "medium",
+					"difficulties": [
+						"ordinary"
+					],
+					"maxShortUsed": 0.7,
+					"minWeeklyHeadroom": 0.1
+				},
+				{
+					"model": "@frontier-1",
+					"effort": "medium",
+					"difficulties": [
+						"hard"
+					],
+					"maxShortUsed": 0.7,
+					"minWeeklyHeadroom": 0.1
+				},
+				{
+					"model": "@frontier-3",
+					"effort": "high",
+					"difficulties": [
+						"hard"
+					],
+					"minWeeklyHeadroom": 0.05,
+					"minMonthlyHeadroom": 0
+				},
+				{
+					"model": "openai-codex/gpt-6.1-sol",
+					"effort": "high",
+					"difficulties": [
+						"hard"
+					],
+					"maxShortUsed": 0.7,
+					"minWeeklyHeadroom": 0.1
+				},
+				{
+					"model": "@frontier-1",
+					"effort": "high",
+					"difficulties": [
+						"critical"
+					],
+					"maxShortUsed": 0.7,
+					"minWeeklyHeadroom": 0.1
+				},
+				{
+					"model": "@frontier-3",
+					"effort": "xhigh",
+					"difficulties": [
+						"critical"
+					],
+					"minWeeklyHeadroom": 0.05,
+					"minMonthlyHeadroom": 0
+				},
+				{
+					"model": "openai-codex/gpt-6.1-sol",
+					"effort": "xhigh",
+					"difficulties": [
+						"critical"
+					],
 					"maxShortUsed": 0.7,
 					"minWeeklyHeadroom": 0.1
 				}
 			],
 			"fallback": {
-				"model": "@grunt",
+				"model": "@frontier-1",
 				"effort": "low"
 			}
 		},
@@ -234,13 +603,17 @@
 			"pool": "mechanical",
 			"description": "Exact lookups, directed tool runs (lint, test, typecheck, build, named commands), and non-code writes with exact content. No source-code edits, no design choices, no git operations."
 		},
-		"grunt": {
-			"pool": "grunt",
-			"effort": [
-				"medium",
-				"high"
-			],
-			"description": "Work whose contract the brief already fixes: settled-spec code edits, new tests, bounded investigation toward a stated fix, verification-style review of implemented code, and git operations (commits, branches, merges, pull requests) that need care but no design decisions. Choose this even when the executor must investigate how to implement, as long as what to build is settled."
+		"commit": {
+			"pool": "commit",
+			"description": "Git operations: staging and committing reviewed changes, commit messages, branches, merges, tags, pull requests, conflict resolution, and history rewrites. No source-code edits beyond resolving a conflict."
+		},
+		"code": {
+			"pool": "code",
+			"description": "Work whose contract the brief already fixes: settled-spec code edits, new tests, and bounded investigation toward a stated fix. Choose this even when the executor must investigate how to implement, as long as what to build is settled."
+		},
+		"review": {
+			"pool": "review",
+			"description": "Verification review of implemented code or a diff against a settled spec or plan: correctness, missed cases, and test coverage. Not judging whether the design itself is right."
 		},
 		"lead": {
 			"model": "@lead",
@@ -319,7 +692,10 @@
 			"slow1",
 			"slow2",
 			"slow3"
-		]
+		],
+		"taskTypes": {
+			"git": "commit"
+		}
 	},
 	"planMetadata": {
 		"frontMatterKey": "plan",
@@ -336,7 +712,6 @@
 		"frontier-2": "@frontier-2",
 		"frontier-3": "@frontier-3",
 		"lead": "@lead",
-		"grunt": "@grunt",
 		"vision": "@vision"
 	}
 }

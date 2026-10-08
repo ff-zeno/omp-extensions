@@ -90,19 +90,22 @@ const CHAT_MODEL = model("chat", ["low", "high", "xhigh"]);
 const OPUS = model("claude-opus-5-5", ["low", "medium", "high", "xhigh", "max"], "anthropic");
 const GROK = model("grok-4.6", ["low", "medium", "high", "xhigh"], "xai-oauth");
 const SOL = model("gpt-6.1-sol", ["low", "medium", "high", "xhigh", "max"], "openai-codex");
+const LUNA = model("gpt-5.6-luna", ["low", "medium", "high", "xhigh", "max"], "openai-codex");
+const HAIKU = model("claude-haiku-5-5", ["low", "medium", "high", "xhigh", "max"], "anthropic");
 const GEMINI = model("gemini-3.8-flash", ["low", "medium", "high"], "google-antigravity");
 const DEFAULT_BINDINGS: Record<string, RoutingTestModel> = {
 	"@frontier-1": OPUS,
 	"@frontier-2": SOL,
 	"@frontier-3": GROK,
 	"@lead": OPUS,
-	"@grunt": model("deepseek-v4.1-flash", ["low", "high", "max"], "surplus"),
+	"@fast": HAIKU,
 	"@vision": GEMINI,
 	"@orchestrator": GEMINI,
 	"anthropic/claude-opus-5-5": OPUS,
 	"anthropic/claude-sonnet-5-5": model("claude-sonnet-5-5", ["low", "medium", "high", "xhigh", "max"], "anthropic"),
 	"xai-oauth/grok-4.6": GROK,
 	"openai-codex/gpt-6.1-sol": SOL,
+	"openai-codex/gpt-5.6-luna": LUNA,
 };
 
 interface Fixture {
@@ -239,6 +242,22 @@ function usageReport(provider: string, modelId: string, fetchedAt = Date.now(), 
 	return { provider, fetchedAt, limits: [limit(`${provider}:${modelId}:5h`, shortDuration, used, 0.2), limit(`${provider}:${modelId}:weekly`, weeklyDuration, used, 0.2)] };
 }
 
+/** Provider-wide usage at `used`; Anthropic and Codex windows are shared by every model of the provider. */
+function usage(provider: string, used = 0.1, fetchedAt = Date.now()): Record<string, unknown> {
+	if (provider !== "openai-codex") return usageReport(provider, "", fetchedAt, used);
+	const shortDuration = 5 * 60 * 60 * 1000;
+	const weeklyDuration = 7 * 24 * 60 * 60 * 1000;
+	const limit = (id: string, durationMs: number) => ({
+		id,
+		label: id,
+		scope: { provider, shared: true },
+		window: { id, label: id, durationMs, resetsAt: fetchedAt + durationMs * 0.8 },
+		amount: { unit: "percent", usedFraction: used },
+	});
+	return { provider, fetchedAt, limits: [limit("openai-codex:5h", shortDuration), limit("openai-codex:7d", weeklyDuration)] };
+}
+const ON_PACE = [usage("anthropic"), usage("xai-oauth"), usage("openai-codex")];
+
 const personaRegistry = () =>
 	(globalThis as Record<symbol, Map<string, { persona: string }> | undefined>)[Symbol.for("omp.persona-suggestions.v1")];
 
@@ -247,7 +266,7 @@ describe("persona suggestions", () => {
 
 	test("hands a confident brute pick for exact work to session-persona under the child's key", async () => {
 		reset();
-		routeChoice = "grunt";
+		routeChoice = "code";
 		difficultyScore = 0;
 		personaChoice = "brute";
 		const fixture = createFixture({ agent: main, usageReports: [usageReport("xai-oauth", "grok-4.6")] });
@@ -261,7 +280,7 @@ describe("persona suggestions", () => {
 
 	test("caps brute to normal above the catalog's difficulty ceiling", async () => {
 		reset();
-		routeChoice = "grunt";
+		routeChoice = "code";
 		difficultyScore = 2;
 		personaChoice = "brute";
 		const fixture = createFixture({ agent: main, usageReports: [usageReport("xai-oauth", "grok-4.6")] });
@@ -273,7 +292,7 @@ describe("persona suggestions", () => {
 
 	test("asks no persona question for agents outside the catalog list or without a spawn key", async () => {
 		reset();
-		routeChoice = "grunt";
+		routeChoice = "code";
 		personaChoice = "brute";
 		const fixture = createFixture({ agent: main, usageReports: [usageReport("xai-oauth", "grok-4.6")] });
 		await spawn(fixture, { agent: "scout", spawnKey: "Looker" });
@@ -286,45 +305,75 @@ describe("persona suggestions", () => {
 describe("intelligent auto-agents runtime", () => {
 	test("routes a covered agent through its task-type pool without persisting task text", async () => {
 		reset();
-		routeChoice = "grunt";
-		const fixture = createFixture({ usageReports: [usageReport("xai-oauth", "grok-4.6")] });
+		routeChoice = "code";
+		const fixture = createFixture({ usageReports: ON_PACE });
 
 		const result = await spawn(fixture);
 
-		expect(result).toMatchObject({ model: ["xai-oauth/grok-4.6"], thinkingLevel: "high" });
+		expect(result).toMatchObject({ thinkingLevel: "low" });
+		expect(result.model).toEqual(["anthropic/claude-sonnet-5-5", "xai-oauth/grok-4.6:high", "openai-codex/gpt-5.6-luna:max"]);
 		const data = decisionData(fixture);
-		expect(data).toMatchObject({ slot: "grunt", difficulty: "ordinary" });
-		expect(data.pool).toMatchObject({ active: "xai-oauth/grok-4.6" });
+		expect(data).toMatchObject({ slot: "code", difficulty: "ordinary" });
+		expect(data.pool).toMatchObject({ active: "anthropic/claude-sonnet-5-5" });
 		expect(JSON.stringify(data)).not.toContain("ASSIGNMENT_TEXT");
 		expect(judgeRequests[0].state).toContain("Routing guidance:");
 	});
 
-	test("routes exact grunt work to Sonnet and harder work away from it", async () => {
+	test("rolls over across providers, not across models of one provider", async () => {
 		reset();
 		difficultyScore = 0;
-		routeChoice = "grunt";
-		// Grok leads the grunt pool while its quota is on pace; only when it is skipped does exact work fall to Sonnet.
-		const exact = createFixture({
-			usageReports: [usageReport("xai-oauth", "grok-4.6", Date.now(), 0.99), usageReport("anthropic", "claude-opus-5-5")],
-		});
-		const result = await spawn(exact);
-		expect(result.model[0]).toBe("anthropic/claude-sonnet-5-5");
-		expect(result.thinkingLevel).toBe("low");
-		expect(decisionData(exact).pool).toMatchObject({ skipped: expect.arrayContaining(["xai-oauth/grok-4.6"]) });
+		routeChoice = "code";
+		// An exhausted Anthropic quota skips Haiku without trying Sonnet or Opus; xAI is next.
+		const anthropicOut = await spawn(
+			createFixture({ usageReports: [usage("anthropic", 0.99), usage("xai-oauth"), usage("openai-codex")] }),
+		);
+		expect(anthropicOut).toMatchObject({ model: ["xai-oauth/grok-4.6", "openai-codex/gpt-5.6-luna:max"], thinkingLevel: "low" });
+
+		reset();
+		difficultyScore = 0;
+		routeChoice = "code";
+		const twoOut = await spawn(
+			createFixture({ usageReports: [usage("anthropic", 0.99), usage("xai-oauth", 0.99), usage("openai-codex")] }),
+		);
+		expect(twoOut).toMatchObject({ model: ["openai-codex/gpt-5.6-luna"], thinkingLevel: "max" });
 
 		reset();
 		difficultyScore = 2;
-		routeChoice = "grunt";
-		const hard = createFixture({
-			usageReports: [usageReport("xai-oauth", "grok-4.6", Date.now(), 0.99), usageReport("anthropic", "claude-opus-5-5")],
-		});
-		const harder = await spawn(hard);
-		expect(harder.model[0]).toBe("anthropic/claude-opus-5-5");
+		routeChoice = "code";
+		const hard = await spawn(createFixture({ usageReports: [usage("anthropic", 0.99), usage("xai-oauth", 0.99), usage("openai-codex")] }));
+		expect(hard).toMatchObject({ model: ["openai-codex/gpt-6.1-sol"], thinkingLevel: "low" });
+
+		reset();
+		difficultyScore = 2;
+		routeChoice = "code";
+		// Every provider exhausted: the pool fallback is Opus low.
+		const allOut = await spawn(
+			createFixture({ usageReports: [usage("anthropic", 0.99), usage("xai-oauth", 0.99), usage("openai-codex", 0.99)] }),
+		);
+		expect(allOut).toMatchObject({ model: ["anthropic/claude-opus-5-5"], thinkingLevel: "low" });
+	});
+
+	test("a git spawn routes through the commit pool without a task-type question", async () => {
+		reset();
+		difficultyScore = 0;
+		routeChoice = "lead";
+		const fixture = createFixture({ usageReports: ON_PACE });
+		const result = await spawn(fixture, { agent: "git" });
+		expect(result).toMatchObject({ model: ["anthropic/claude-haiku-5-5", "xai-oauth/grok-4.6:low", "openai-codex/gpt-5.6-luna:xhigh"], thinkingLevel: "xhigh" });
+		expect(decisionData(fixture)).toMatchObject({ slot: "commit", difficulty: "exact" });
+		expect(judgeRequests[0].questions.route).toBeUndefined();
+
+		reset();
+		difficultyScore = 0;
+		routeChoice = "lead";
+		const directed = createFixture({ usageReports: ON_PACE });
+		await spawn(directed, { agent: "git", assignment: "Resolve it\nDirective: use code\n" });
+		expect(decisionData(directed)).toMatchObject({ slot: "code" });
 	});
 
 	test("a Directive line wins over the pool and pins the model", async () => {
 		reset();
-		routeChoice = "grunt";
+		routeChoice = "code";
 		const fixture = createFixture();
 		const result = await spawn(fixture, { assignment: "Do it\nDirective: use frontier-2\n" });
 
@@ -453,7 +502,7 @@ describe("intelligent auto-agents runtime", () => {
 	test("a failed difficulty rating keeps the baseline spawn", async () => {
 		reset();
 		judgeError = new Error("judge down");
-		routeChoice = "grunt";
+		routeChoice = "code";
 		const fixture = createFixture();
 		const result = await spawn(fixture);
 		expect(result).toBeUndefined();
@@ -495,7 +544,7 @@ describe("intelligent auto-agents runtime", () => {
 
 	test("planning readiness only runs for a catalog readiness agent on main", async () => {
 		reset();
-		routeChoice = "grunt";
+		routeChoice = "code";
 		const fixture = createFixture();
 		await spawn(fixture, { agent: "task" });
 		expect(judgeRequests.every(request => !Object.keys(request.questions.route?.criteria ?? {}).includes("discuss-with-user"))).toBe(true);
@@ -503,7 +552,7 @@ describe("intelligent auto-agents runtime", () => {
 
 	test("solutionSpace is fed to Jev but never persisted", async () => {
 		reset();
-		routeChoice = "grunt";
+		routeChoice = "code";
 		const fixture = createFixture();
 		await spawn(fixture, { solutionSpace: "SOLUTION_SPACE_TEXT" });
 		expect(judgeRequests[0].state).toContain("SOLUTION_SPACE_TEXT");
@@ -513,29 +562,29 @@ describe("intelligent auto-agents runtime", () => {
 	test("skips a suppressed pool member for the next route", async () => {
 		reset();
 		difficultyScore = 0;
-		routeChoice = "grunt";
-		// Grok is suppressed at its resolved exact-work effort, so exact work rolls over to Sonnet.
+		routeChoice = "code";
+		// Haiku is suppressed at its pinned effort, so exact work rolls over to the next provider.
 		const fixture = createFixture({
-			usageReports: [usageReport("xai-oauth", "grok-4.6"), usageReport("anthropic", "claude-opus-5-5")],
-			suppressedSelectors: ["xai-oauth/grok-4.6:medium"],
+			usageReports: ON_PACE,
+			suppressedSelectors: ["anthropic/claude-haiku-5-5:xhigh"],
 		});
 		const result = await spawn(fixture);
-		expect(result.model[0]).toBe("anthropic/claude-sonnet-5-5");
-		expect(decisionData(fixture).rollover).toMatchObject({ from: "xai-oauth/grok-4.6" });
+		expect(result.model[0]).toBe("xai-oauth/grok-4.6");
+		expect(decisionData(fixture).rollover).toMatchObject({ from: "anthropic/claude-haiku-5-5" });
 	});
 
 	test("usage fetch failure still routes through the declared pool order", async () => {
 		reset();
-		routeChoice = "grunt";
+		routeChoice = "code";
 		const fixture = createFixture({ usageError: new Error("usage unavailable") });
 		const result = await spawn(fixture);
-		expect(result.model[0]).toBe("xai-oauth/grok-4.6");
+		expect(result.model[0]).toBe("anthropic/claude-sonnet-5-5");
 		expect(decisionData(fixture).pool).toMatchObject({ status: "no-usage" });
 	});
 
 	test("keeps the routed member when a pool member is over quota", async () => {
 		reset();
-		routeChoice = "grunt";
+		routeChoice = "code";
 		const fixture = createFixture({ usageReports: [usageReport("xai-oauth", "grok-4.6", Date.now(), 0.99), usageReport("anthropic", "claude-opus-5-5")] });
 		const result = await spawn(fixture);
 		expect(result.model[0]).not.toBe("xai-oauth/grok-4.6");
@@ -544,7 +593,7 @@ describe("intelligent auto-agents runtime", () => {
 
 	test("records a child failure as a rollover and leaves an abort unchanged", async () => {
 		reset();
-		routeChoice = "grunt";
+		routeChoice = "code";
 		const run = async (sessionId: string, provider: string, modelId: string, stopReason: string) => {
 			const parent = createFixture({ usageReports: [usageReport("xai-oauth", "grok-4.6")] });
 			await spawn(parent);
@@ -570,7 +619,7 @@ describe("intelligent auto-agents runtime", () => {
 
 	test("the /auto-agents command reports status without changing the chat model", async () => {
 		reset();
-		routeChoice = "grunt";
+		routeChoice = "code";
 		const fixture = createFixture({ usageReports: [usageReport("xai-oauth", "grok-4.6")] });
 		await spawn(fixture);
 		const commands = new Map<string, { handler: (args: string, ctx: unknown) => Promise<void> }>();

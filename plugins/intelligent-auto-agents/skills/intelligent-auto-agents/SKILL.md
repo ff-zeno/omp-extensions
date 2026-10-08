@@ -5,19 +5,19 @@ description: Use when delegating OMP work with intelligent auto-agents enabled, 
 
 # Intelligent auto-agents
 
-Jev is the router described by `catalog.json` (catalog v8). Before each covered or pinned subagent spawn it selects a task type, rates difficulty, and resolves a concrete model and effort.
+Jev is the router described by `catalog.json` (catalog v9). Before each covered or pinned subagent spawn it selects a task type, rates difficulty, and resolves a concrete model and effort.
 
 ## Terms
 
 - **Model** means the provider and model that runs a worker.
 - **Effort** means the reasoning level a model supports, such as `low`, `medium`, `high`, `xhigh`, or `max`.
 - **OMP model role** means a name in `modelRoles` from `config.yml`.
-- **Role alias** means a selector such as `@grunt` or `@frontier-2` that resolves through `modelRoles`.
+- **Role alias** means a selector such as `@fast` or `@frontier-2` that resolves through `modelRoles`.
 - **Job** means the worker purpose selected with the `agent` field.
 - **Covered agent** means an agent routed through a task type: `task`, `sonic`, `scout`, `reviewer`, `security-reviewer`, `git`, and `plan`.
 - **Pinned agent** means an agent that keeps its bound model while Jev sets only effort: `orchestrator`, `design-master`, `design-second`, `review-closer`, `review-verifier`, `review-frontier-1`, `review-frontier-2`, `review-frontier-3`, and the chat-cycle roles `medium` and `slow1`–`slow3`.
-- **Task type** means a named kind of work — `mechanical`, `grunt`, `lead`, `vision`, `security-review`, `plan`, `plan-review`, `frontier-review` — with a fixed model or a pool, plus an effort range.
-- **Pool** means an ordered member list (`mechanical`, `grunt`, `plan-review`) that Jev ranks by quota before each spawn.
+- **Task type** means a named kind of work — `mechanical`, `commit`, `code`, `review`, `lead`, `vision`, `security-review`, `plan`, `plan-review`, `frontier-review` — with a fixed model or a pool, plus an effort range.
+- **Pool** means an ordered member list (`mechanical`, `commit`, `code`, `review`, `plan-review`) that Jev ranks by quota before each spawn.
 - **Difficulty** means `exact`, `ordinary`, `hard`, or `critical`, rated from the work itself.
 - **Difficulty-to-effort map** means the per-model effort for each difficulty; the task-type range clamps it and the model's supported efforts trim it.
 - **Directive** means a `Directive:` line in the brief naming a role alias, literal model, or task type, with an optional effort.
@@ -34,7 +34,7 @@ Jev is the router described by `catalog.json` (catalog v8). Before each covered 
 | Persona selected by `# Mode: brute` or `# Mode: orchestrate`: Brute for settled narrow work done as told, Normal for investigation, design choice, or review, Orchestrate only with a ready plan whose lanes run 2+ parallel streams | Parent |
 | Persona when the parent named none: Normal or Brute for `task`, `sonic`, and `git` workers, never Orchestrate; Normal when Jev is unsure or unavailable | Jev, from `catalog.json` `personas` |
 | Recipe | Parent |
-| Task type, difficulty, pool order, model role, and effort | Jev, from `catalog.json` |
+| Task type, difficulty, pool order, model role, and effort | Jev, from `catalog.json`, except `git`, which pins the `commit` task type |
 | Concrete model and effort validation | OMP, from `modelRoles` |
 
 Jev never adds, removes, or reorders workers.
@@ -45,8 +45,9 @@ Highest wins:
 
 1. A spawn lock (`modelLocked` or `effortLocked`) keeps the baseline configuration.
 2. A `Directive:` line in the brief pins the named role alias, literal model, or task type.
-3. A pool ranks its members by difficulty scope and quota for the task type.
-4. A fixed task-type model, then the agent's bound `modelRoles` selector.
+3. The agent's pinned task type from `agents.taskTypes` (a directive model skips it; a directive task type overrides it).
+4. A pool ranks its members by difficulty scope and quota for the task type.
+5. A fixed task-type model, then the agent's bound `modelRoles` selector.
 
 ## Dispatch
 
@@ -76,11 +77,11 @@ Jev does not see concrete model identifiers.
 
 Covered agents resolve a task type, then that type's pool or fixed model:
 
-- `task` uses `grunt` for settled specifications, `lead` when judgment, hard debugging, or root-cause work is needed, and `vision` for image, screenshot, or video analysis.
-- `reviewer` uses `grunt` for settled-spec verification of an implemented diff, and `plan-review` (or `frontier-review`) when the assignment reviews a plan.
+- `task` uses `code` for settled specifications, `lead` when judgment, hard debugging, or root-cause work is needed, `vision` for image, screenshot, or video analysis, and `mechanical` or `commit` when the brief is exact non-code work or git operations.
+- `reviewer` uses `review` for settled-spec verification of an implemented diff, and `plan-review` (or `frontier-review`) when the assignment reviews a plan.
 - `sonic` uses `mechanical` for non-code writes with exact content (docs text, config values, data files) and directed tool runs; any source-code edit, however trivial, goes to `task`.
-- `scout` uses `grunt` for read-only investigation.
-- `git` uses `grunt` for commits, branches, merges, and pull requests.
+- `scout` uses `code` for read-only investigation.
+- `git` is pinned to `commit` for commits, branches, merges, and pull requests.
 - `plan` uses the fixed `plan` model and may be rated for difficulty.
 - `security-reviewer` uses `security-review`.
 
@@ -93,8 +94,32 @@ Pinned agents keep their bound `modelRoles`; Jev sets only effort from the model
 
 Jev rates difficulty as Exact, Ordinary, Hard, or Critical according to the catalog ladder.
 A pool member scoped with `difficulties` serves only those levels.
-In the grunt pool, `@frontier-3` (Grok) leads while its quota is on pace; when it is skipped, exact work falls to `anthropic/claude-sonnet-5-5` and anything above exact falls to `@lead` (Opus) at low.
+Each worker pool lists one member per provider per difficulty, tried Anthropic, then xAI, then OpenAI, because Haiku, Sonnet, and Opus share one Anthropic quota, so rolling over inside a provider buys nothing.
+Every worker pool's fallback is `@frontier-1` (Opus) low, used only when every member is quota-skipped.
+
+| Pool | Difficulty | Anthropic | xAI (Grok) | OpenAI |
+|---|---|---|---|---|
+| `mechanical` | exact | Haiku xhigh | Grok low | Luna xhigh |
+| `mechanical` | ordinary | Haiku xhigh | Grok low | Luna xhigh |
+| `mechanical` | hard | Sonnet low | Grok high | Luna max |
+| `mechanical` | critical | Opus medium | Grok high | Luna max |
+| `commit` | exact | Haiku xhigh | Grok low | Luna xhigh |
+| `commit` | ordinary | Haiku xhigh | Grok low | Luna xhigh |
+| `commit` | hard | Opus low | Grok high | Luna max |
+| `commit` | critical | Opus medium | Grok xhigh | Luna max |
+| `code` | exact | Haiku xhigh | Grok low | Luna max |
+| `code` | ordinary | Sonnet low | Grok high | Luna max |
+| `code` | hard | Opus medium | Grok high | Sol low |
+| `code` | critical | Opus high | Grok xhigh | Sol medium |
+| `review` | exact | Sonnet low | Grok low | Sol low |
+| `review` | ordinary | Sonnet low | Grok high | Sol medium |
+| `review` | hard | Opus medium | Grok high | Sol high |
+| `review` | critical | Opus high | Grok xhigh | Sol xhigh |
+
 Sonnet is named literally with no role and never runs above low.
+The OpenAI tier is `openai-codex/gpt-5.6-luna` (mechanical and commit) and `openai-codex/gpt-6.1-sol` (code and review); both gate at `maxShortUsed` 0.7 and `minWeeklyHeadroom` 0.1.
+`openai-codex/gpt-6.1-sol` is review-only as a role alias (the `@frontier-2`, `@slow2`, `@advisor`, and `@manager` aliases stay review-only), while the literal id serves the `code` and `review` pools.
+`openai-codex/gpt-5.6-luna` is blocked as a `Directive:` target but serves the `mechanical` and `commit` pools; the `web` role also names it literally.
 A planning request first passes the catalog readiness check.
 An autonomous planner is allowed only when requirements, target files, acceptance criteria, and technical constraints are concrete.
 Otherwise the parent should discuss the open choices with the user first.

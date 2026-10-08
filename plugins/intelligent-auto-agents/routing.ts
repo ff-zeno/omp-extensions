@@ -101,7 +101,7 @@ export type PoolLimits = {
 };
 
 export type Catalog = {
-	version: 8;
+	version: 9;
 	enabled: boolean;
 	timeoutMs: number;
 	maxInputBytes: number;
@@ -127,7 +127,11 @@ export type Catalog = {
 	poolLimits: PoolLimits;
 	pools: Record<string, PoolSpec>;
 	taskTypes: Record<string, TaskTypeSpec>;
-	agents: { covered: string[]; pinned: string[] };
+	/**
+	 * `covered` agents route through task types; `pinned` agents keep their bound model. `taskTypes`
+	 * fixes the task type for named covered agents, so Jev rates only difficulty for them.
+	 */
+	agents: { covered: string[]; pinned: string[]; taskTypes: Record<string, string> };
 	planMetadata: PlanMetadata;
 	/** Case-insensitive substrings no directive target may contain. */
 	blockedDirectiveTargets: string[];
@@ -367,7 +371,7 @@ function assertModelSafeMap(
 export function parseCatalog(value: unknown): Catalog {
 	if (
 		!record(value) ||
-		value.version !== 8 ||
+		value.version !== 9 ||
 		typeof value.enabled !== "boolean" ||
 		!Number.isInteger(value.timeoutMs) ||
 		Number(value.timeoutMs) < 100 ||
@@ -414,6 +418,7 @@ export function parseCatalog(value: unknown): Catalog {
 		!agentNames(value.agents.pinned) ||
 		!unique(value.agents.covered) ||
 		!unique(value.agents.pinned) ||
+		!record(value.agents.taskTypes) ||
 		!record(value.planMetadata) ||
 		!text(value.planMetadata.frontMatterKey) ||
 		!text(value.planMetadata.authorsField) ||
@@ -458,6 +463,16 @@ export function parseCatalog(value: unknown): Catalog {
 		taskTypes[name] = entry;
 	}
 
+	const agentTaskTypes: Record<string, string> = {};
+	for (const [agent, taskType] of Object.entries(value.agents.taskTypes)) {
+		if (!text(taskType)) throw new Error(`Invalid auto-agents agent task type for "${agent}"`);
+		if (!value.agents.covered.includes(agent))
+			throw new Error(`Auto-agents agent task type names agent "${agent}" that is not covered`);
+		if (!(taskType in taskTypes))
+			throw new Error(`Auto-agents agent "${agent}" names unknown task type "${taskType}"`);
+		agentTaskTypes[agent] = taskType;
+	}
+
 	const directives: Record<string, string> = {};
 	for (const [name, target] of Object.entries(value.directiveTargets)) {
 		if (!text(name) || !text(target)) throw new Error("Invalid auto-agents directive target");
@@ -472,7 +487,7 @@ export function parseCatalog(value: unknown): Catalog {
 	assertModelSafeMap(value as Record<string, unknown>, pools, taskTypes, reviewOnly, value.blockedDirectiveTargets);
 
 	return {
-		version: 8,
+		version: 9,
 		enabled: value.enabled,
 		timeoutMs: Number(value.timeoutMs),
 		maxInputBytes: Number(value.maxInputBytes),
@@ -508,7 +523,7 @@ export function parseCatalog(value: unknown): Catalog {
 		poolLimits: value.poolLimits,
 		pools,
 		taskTypes,
-		agents: { covered: value.agents.covered, pinned: value.agents.pinned },
+		agents: { covered: value.agents.covered, pinned: value.agents.pinned, taskTypes: agentTaskTypes },
 		planMetadata: {
 			frontMatterKey: value.planMetadata.frontMatterKey,
 			authorsField: value.planMetadata.authorsField,

@@ -1,12 +1,12 @@
 # Intelligent auto-agents
 
-This OMP extension routes eligible subagent spawns through Jev, a TypeSafe-backed classifier described by `catalog.json` (catalog v8).
+This OMP extension routes eligible subagent spawns through Jev, a TypeSafe-backed classifier described by `catalog.json` (catalog v9).
 
 Jev selects a task type, rates task difficulty against the catalog ladder, resolves the model's effort from its difficulty-to-effort map, ranks pool members by quota, and records routing metadata.
 
 When the parent names no persona, Jev also suggests one for the worker (Normal or Brute) in the same classifier call; see [Persona suggestions](#persona-suggestions).
 
-A brief can steer Jev with a `Directive: use <alias|model> [effort]` line. Precedence is spawn lock, then directive, then pool, then a fixed task-type model, then the agent's bound `modelRoles` selector.
+A brief can steer Jev with a `Directive: use <alias|model> [effort]` line. Precedence is spawn lock, then directive, then the agent's pinned `agents.taskTypes` entry, then pool, then a fixed task-type model, then the agent's bound `modelRoles` selector.
 
 Jev keeps routed backups in the retry chain when the patched OMP core is installed.
 
@@ -167,9 +167,9 @@ Media tasks follow the same rules: Jev picks the `vision` task type from the bri
 
 The catalog and bundled agent frontmatter reference these `modelRoles` names.
 
-`frontier-1`, `frontier-2`, and `frontier-3` are the three frontier models. `lead` aliases one of them, and the pinned `review-frontier-1`, `review-frontier-2`, and `review-frontier-3` agents pin one frontier role each. `grunt` is the cheap worker and the pools' fallback, `vision` serves the `vision` task type, and `orchestrator` binds the bundled `orchestrator` agent.
+`frontier-1`, `frontier-2`, and `frontier-3` are the three frontier models. `lead` aliases one of them, and the pinned `review-frontier-1`, `review-frontier-2`, and `review-frontier-3` agents pin one frontier role each. `fast` is the cheap member that leads the exact and ordinary cells of the worker pools, `task` is the unrouted baseline worker (`@frontier-1:low`, Opus), `vision` serves the `vision` task type, and `orchestrator` binds the bundled `orchestrator` agent.
 
-Sonnet has no role. The catalog names it as the literal `anthropic/claude-sonnet-5-5`, scoped to exact grunt work and never above low.
+Sonnet has no role. The catalog names it as the literal `anthropic/claude-sonnet-5-5`, a worker-pool member at low and never above.
 
 The shipped `models` map also lists the author's literal provider models with their difficulty-to-effort maps; an entry for a provider you do not use has no effect, and `*` covers every model it does not name.
 
@@ -185,9 +185,10 @@ modelRoles:
   frontier-2: your-provider/your-second-frontier-model
   frontier-3: your-provider/your-third-frontier-model
   lead: "@frontier-1"
-  grunt: your-provider/your-fast-model
+  fast: your-provider/your-fast-model
   vision: your-provider/your-vision-model:high
   orchestrator: your-provider/your-fast-model
+  task: "@frontier-1:low"
 ```
 
 Role aliases are resolved by OMP, so the placeholder selectors must be replaced with models configured on your machine.
@@ -231,15 +232,15 @@ Keep the catalog version and schema valid; the plugin refuses to load a catalog 
 
 `planningReadiness` gates planning spawns: for a top-level spawn of an agent in `agents`, Jev answers `instructions` with one of `routes` (`autonomous-plan` or `discuss-with-user`), and `discuss-with-user` blocks the spawn so the main chat settles the open questions first.
 
-`pools` names ordered worker pools; the shipped catalog has `mechanical`, `grunt`, and `plan-review`. Each pool lists ordered `members`, each naming a role alias or a literal `provider/model`, plus a `fallback`. A member may set `effort` (pins its effort), `difficulties` (the levels it serves; absent means every level), and the quota gates `maxShortUsed`, `minWeeklyHeadroom`, and `minMonthlyHeadroom`. A pool with `excludePlanAuthors` drops every model named in the plan's `plan:` front matter and prefers a member that has not already reviewed the plan.
+`pools` names ordered worker pools; the shipped catalog has `mechanical`, `commit`, `code`, `review`, and `plan-review`. Each pool lists ordered `members`, each naming a role alias or a literal `provider/model`, plus a `fallback`. A member may set `effort` (pins its effort), `difficulties` (the levels it serves; absent means every level), and the quota gates `maxShortUsed`, `minWeeklyHeadroom`, and `minMonthlyHeadroom`. A pool with `excludePlanAuthors` drops every model named in the plan's `plan:` front matter and prefers a member that has not already reviewed the plan.
 
-`taskTypes` binds each kind of work (`mechanical`, `grunt`, `lead`, `vision`, `security-review`, `plan`, `plan-review`, `frontier-review`) to exactly one existing pool or fixed `model`, plus an optional `effort` range and `backups`.
+`taskTypes` binds each kind of work (`mechanical`, `commit`, `code`, `review`, `lead`, `vision`, `security-review`, `plan`, `plan-review`, `frontier-review`) to exactly one existing pool or fixed `model`, plus an optional `effort` range and `backups`.
 
 `models` holds each model's `supports` list and its difficulty-to-effort map for `exact`, `ordinary`, `hard`, and `critical`; `*` is the fallback map. The task-type effort range clamps the map, then the model's `supports` list trims it. An optional `maxEffort` caps the model even when a pool member pins a higher effort; the shipped catalog caps `anthropic/claude-sonnet-5-5` at `low`.
 
-`reviewOnly` keeps models off worker duty. A catalog reference that exactly matches an entry in `reviewOnly.models` (a literal `provider/model` or a role alias), or contains a `reviewOnly.containing` substring (case-insensitive), may appear only in the pools named in `reviewOnly.pools`. The plugin refuses a catalog that puts one in another pool, a task-type `model`, or a `backups` list. The shipped catalog keeps the Codex models and their role aliases to plan review.
+`reviewOnly` keeps models off worker duty. A catalog reference that exactly matches an entry in `reviewOnly.models` (a literal `provider/model` or a role alias), or contains a `reviewOnly.containing` substring (case-insensitive), may appear only in the pools named in `reviewOnly.pools`. The plugin refuses a catalog that puts one in another pool, a task-type `model`, or a `backups` list. The shipped catalog keeps the Codex role aliases (`@frontier-2`, `@slow2`, `@advisor`, `@manager`) to plan review, while the literal `openai-codex/gpt-6.1-sol` and `openai-codex/gpt-5.6-luna` ids may serve in worker pools.
 
-`agents.covered` lists the agents routed through task types; `agents.pinned` lists the agents that keep their bound model and receive only effort. `directiveTargets` maps a `Directive:` alias to a role, and `blockedDirectiveTargets` lists case-insensitive substrings no directive target may contain.
+`agents.covered` lists the agents routed through task types; `agents.pinned` lists the agents that keep their bound model and receive only effort. `agents.taskTypes` pins a fixed task type to a covered agent (`git` → `commit`); a directive model skips it and a `Directive: use <task type>` overrides it. A pin on an uncovered agent or an unknown task type is rejected. Other covered agents, `reviewer` included, still get every task type Jev offers. `directiveTargets` maps a `Directive:` alias to a role, and `blockedDirectiveTargets` lists case-insensitive substrings no directive target may contain.
 
 `personas` controls the persona suggestion: `agents` lists the agents Jev suggests a persona for, `instructions` and `criteria` (one description per persona, `normal` and `brute`) go to Jev verbatim, and `maxDifficulty` caps Brute: a worker rated harder than this level, or not rated at all, gets Normal.
 

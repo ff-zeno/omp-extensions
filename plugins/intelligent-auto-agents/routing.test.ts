@@ -67,24 +67,27 @@ function report(provider: string, used: number, fetchedAt = Date.now()): Record<
 	return { provider, fetchedAt, limits: [window(`${provider}:5h`, 5 * 60 * 60 * 1000, true), window(`${provider}:weekly`, weekly, true)] };
 }
 
-describe("catalog v8", () => {
+describe("catalog v9", () => {
 	test("parses the shipped catalog and its routing surface", () => {
-		expect(catalog.version).toBe(8);
-		expect(Object.keys(catalog.pools)).toEqual(["mechanical", "grunt", "plan-review"]);
+		expect(catalog.version).toBe(9);
+		expect(Object.keys(catalog.pools)).toEqual(["mechanical", "commit", "code", "review", "plan-review"]);
 		expect(Object.keys(catalog.taskTypes).sort()).toEqual([
+			"code",
+			"commit",
 			"frontier-review",
-			"grunt",
 			"lead",
 			"mechanical",
 			"plan",
 			"plan-review",
+			"review",
 			"security-review",
 			"vision",
 		]);
+		expect(catalog.agents.taskTypes).toEqual({ git: "commit" });
 		expect(catalog.agents.covered).toEqual(["task", "sonic", "scout", "reviewer", "security-reviewer", "git", "plan"]);
 		expect(catalog.agents.pinned).toContain("review-frontier-1");
 		expect(catalog.agents.pinned).toContain("review-frontier-3");
-		expect(catalog.directiveTargets).toMatchObject({ "frontier-1": "@frontier-1", grunt: "@grunt", vision: "@vision" });
+		expect(catalog.directiveTargets).toMatchObject({ "frontier-1": "@frontier-1", vision: "@vision" });
 		expect(catalog.nuances.length).toBeGreaterThan(0);
 		expect(catalog.planningReadiness.agents).toEqual(["plan"]);
 		expect(catalog.models["anthropic/claude-sonnet-5-5"].maxEffort).toBe("low");
@@ -105,12 +108,20 @@ describe("catalog v8", () => {
 		expect(() => parseCatalog(missingPool)).toThrow("unknown pool");
 
 		const unknownPool = clone();
-		(unknownPool.taskTypes as Record<string, Record<string, unknown>>).grunt.pool = "nope";
+		(unknownPool.taskTypes as Record<string, Record<string, unknown>>).code.pool = "nope";
 		expect(() => parseCatalog(unknownPool)).toThrow("unknown pool");
 
 		const both = clone();
-		(both.taskTypes as Record<string, Record<string, unknown>>).grunt.model = "@lead";
+		(both.taskTypes as Record<string, Record<string, unknown>>).code.model = "@lead";
 		expect(() => parseCatalog(both)).toThrow("both a pool and a model");
+
+		const uncoveredAgentTaskType = clone();
+		((uncoveredAgentTaskType.agents as Record<string, unknown>).taskTypes as Record<string, string>).orchestrator = "code";
+		expect(() => parseCatalog(uncoveredAgentTaskType)).toThrow('names agent "orchestrator" that is not covered');
+
+		const unknownAgentTaskType = clone();
+		((unknownAgentTaskType.agents as Record<string, unknown>).taskTypes as Record<string, string>).git = "nope";
+		expect(() => parseCatalog(unknownAgentTaskType)).toThrow('unknown task type "nope"');
 
 		const badMap = clone();
 		delete ((badMap.models as Record<string, Record<string, unknown>>)["anthropic/claude-opus-5-5"] as Record<string, unknown>)
@@ -156,11 +167,12 @@ describe("catalog v8", () => {
 		(unknownReviewPool.reviewOnly as Record<string, unknown>).pools = ["nope"];
 		expect(() => parseCatalog(unknownReviewPool)).toThrow("unknown pool");
 
-		const solPool = clone();
+		// Codex role aliases stay review-only; the literal Sol and Luna ids may serve as pool members.
+		const solAliasPool = clone();
 		(
-			((solPool.pools as Record<string, Record<string, unknown>>).grunt.members as Array<Record<string, unknown>>)[0]
-		).model = "openai-codex/gpt-6.1-sol";
-		expect(() => parseCatalog(solPool)).toThrow("cannot take worker work");
+			((solAliasPool.pools as Record<string, Record<string, unknown>>).code.members as Array<Record<string, unknown>>)[0]
+		).model = "@frontier-2";
+		expect(() => parseCatalog(solAliasPool)).toThrow("cannot take worker work");
 
 		const solTaskModel = clone();
 		(solTaskModel.taskTypes as Record<string, Record<string, unknown>>).lead.model = "@manager";
@@ -184,11 +196,10 @@ describe("catalog v8", () => {
 		).model = "openai-codex/gpt-6.1-sol";
 		expect(() => parseCatalog(solPlanReview)).not.toThrow();
 
-		// The fixed mechanical/grunt/plan-review pools are no longer required; only task-type pool
-		// references must resolve.
+		// The fixed pools are not required; only task-type pool references must resolve.
 		const noFixedPools = clone();
 		delete (noFixedPools.pools as Record<string, unknown>)["mechanical"];
-		(noFixedPools.taskTypes as Record<string, Record<string, unknown>>).mechanical.pool = "grunt";
+		(noFixedPools.taskTypes as Record<string, Record<string, unknown>>).mechanical.pool = "code";
 		expect(() => parseCatalog(noFixedPools)).not.toThrow();
 	});
 });
@@ -214,7 +225,6 @@ describe("effort resolution", () => {
 		expect(fitEffort("high", ["low"])).toBe("low");
 		expect(fitEffort("medium", [])).toBeUndefined();
 		expect(effortForModel(catalog, "anthropic/claude-opus-5-5", "critical", ["high", "xhigh"])).toBe("xhigh");
-		expect(effortForModel(catalog, "surplus/deepseek-v4.1-flash", "critical", ["low", "high"])).toBe("low");
 		expect(effortForModel(catalog, "xai-oauth/grok-4.6", "hard", ["low", "high"])).toBe("high");
 	});
 
@@ -225,8 +235,8 @@ describe("effort resolution", () => {
 	});
 
 	test("knows which task types depend on the difficulty rating", () => {
-		expect(taskTypeEffortVaries(catalog, "mechanical")).toBe(false);
-		expect(taskTypeEffortVaries(catalog, "grunt")).toBe(true);
+		expect(taskTypeEffortVaries(catalog, "mechanical")).toBe(true);
+		expect(taskTypeEffortVaries(catalog, "code")).toBe(true);
 		expect(taskTypeEffortVaries(catalog, "lead")).toBe(true);
 		expect(taskTypeEffortVaries(catalog, "plan-review")).toBe(true);
 		expect(taskTypeEffortVaries(catalog, "unknown")).toBe(false);

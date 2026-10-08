@@ -837,7 +837,8 @@ export function register(pi: ExtensionAPI): void {
 			directiveEffort = directive.effort;
 		}
 
-		let taskTypeName = directiveTaskType;
+		// A directive task type wins over the agent's fixed task type; a directive model skips both.
+		let taskTypeName = directiveTaskType ?? (directiveModel === undefined ? catalog.agents.taskTypes[event.agent] : undefined);
 		const needsTaskChoice = directiveModel === undefined && taskTypeName === undefined;
 		const candidates = needsTaskChoice ? Object.keys(catalog.taskTypes) : [];
 		if (needsTaskChoice && candidates.length === 1) taskTypeName = candidates[0];
