@@ -1,8 +1,8 @@
 diff --git a/docs/extensions.md b/docs/extensions.md
-index 987cca6573..4018fbb355 100644
+index be6f1989cd..0d2d1f1f00 100644
 --- a/docs/extensions.md
 +++ b/docs/extensions.md
-@@ -480,6 +480,11 @@ and `/new`. Commands retain their explicit prefill and session-transition action
+@@ -499,6 +499,11 @@ and `/new`. Commands retain their explicit prefill and session-transition action
  ### Subagent lifecycle
  
  - `before_subagent_spawn` → `{ model?: string | string[]; block?: boolean; reason?: string; note?: string }`. Fires in the parent session exactly once per spawned child (`task`, eval `agent()`, workpool workers), at dispatch before the child resolves its model — never during a frontend's validation preflight, so stateful routers (round-robin, quota) advance once per child. The event carries `agent`, `invocationKind`, `modelRole` (the pre-expansion role alias, when any), the expanded `patterns` core would use, and an optional stable `spawnKey`. A returned `model` replaces the spawn's attempt-ordered patterns while keeping the role identity, so the remaining entries become the child's retry fallback chain; handlers run in extension order and the last returned `model` wins, along with its `note`, which the task UI shows as the spawn's routing reason on live, async, and settled rows. `block: true` refuses the spawn with `reason`. Cancelling the spawn releases an awaiting handler (its result is discarded and pending `ctx.ui` dialogs close) instead of holding the spawn until the handler timeout.
@@ -15,7 +15,7 @@ index 987cca6573..4018fbb355 100644
  ### Reliability/runtime signals
  
 diff --git a/packages/coding-agent/CHANGELOG.md b/packages/coding-agent/CHANGELOG.md
-index 965cb7e8c0..bbd3868833 100644
+index 76fb1cb950..28178e46c9 100644
 --- a/packages/coding-agent/CHANGELOG.md
 +++ b/packages/coding-agent/CHANGELOG.md
 @@ -1,6 +1,7 @@
@@ -24,13 +24,13 @@ index 965cb7e8c0..bbd3868833 100644
  ## [Unreleased]
 +- Extended `before_subagent_spawn` for lock-aware model and thinking-level routing, cancellation, explicit `routing: "off"` opt-out, a task-only `solutionSpace` on the event, and subagent routing API v2; routed backups remain the subagent retry chain.
  
- ## [18.6.1] - 2026-10-04
+ ## [18.8.4] - 2026-10-08
  
 diff --git a/packages/coding-agent/src/eval/agent-bridge.ts b/packages/coding-agent/src/eval/agent-bridge.ts
-index d68b53c588..108010ad65 100644
+index ab279b7344..b0749547d0 100644
 --- a/packages/coding-agent/src/eval/agent-bridge.ts
 +++ b/packages/coding-agent/src/eval/agent-bridge.ts
-@@ -30,6 +30,7 @@ const agentArgsSchema = type({
+@@ -28,6 +28,7 @@ const agentArgsSchema = type({
  	"label?": "string",
  	"schema?": "unknown",
  	"schemaMode?": "'permissive' | 'strict'",
@@ -38,7 +38,7 @@ index d68b53c588..108010ad65 100644
  	"isolated?": "boolean",
  	"apply?": "boolean",
  	"merge?": "boolean",
-@@ -44,6 +45,7 @@ interface EvalAgentArgs {
+@@ -41,6 +42,7 @@ interface EvalAgentArgs {
  	label?: string;
  	schema?: unknown;
  	schemaMode?: StructuredSubagentSchemaMode;
@@ -46,34 +46,34 @@ index d68b53c588..108010ad65 100644
  	isolated?: boolean;
  	apply?: boolean;
  	merge?: boolean;
-@@ -202,6 +204,7 @@ export async function runEvalAgent(args: unknown, options: EvalAgentBridgeOption
+@@ -195,6 +197,7 @@ export async function runEvalAgent(args: unknown, options: EvalAgentBridgeOption
  			session: options.session,
  			invocationKind: "eval",
  			assignment: parsed.prompt,
 +			...(parsed.routing !== undefined ? { routing: parsed.routing } : {}),
  			...(parsed.agent !== undefined ? { agent: parsed.agent } : {}),
- 			...(parsed.model !== undefined ? { model: parsed.model } : {}),
  			...(Object.hasOwn(parsed, "schema") ? { outputSchema: parsed.schema } : {}),
-@@ -226,6 +229,7 @@ export async function runEvalAgent(args: unknown, options: EvalAgentBridgeOption
+ 			...(parsed.schemaMode !== undefined ? { schemaMode: parsed.schemaMode } : {}),
+@@ -218,6 +221,7 @@ export async function runEvalAgent(args: unknown, options: EvalAgentBridgeOption
  						session: options.session,
  						invocationKind: "eval",
  						assignment: parsed.prompt,
 +						...(parsed.routing !== undefined ? { routing: parsed.routing } : {}),
  						...(parsed.agent !== undefined ? { agent: parsed.agent } : {}),
- 						...(parsed.model !== undefined ? { model: parsed.model } : {}),
  						...(Object.hasOwn(parsed, "schema") ? { outputSchema: parsed.schema } : {}),
+ 						...(parsed.schemaMode !== undefined ? { schemaMode: parsed.schemaMode } : {}),
 diff --git a/packages/coding-agent/src/eval/js/shared/prelude.txt b/packages/coding-agent/src/eval/js/shared/prelude.txt
-index b43a9aff18..c6d5074048 100644
+index dc21400ef1..f7b1e000f2 100644
 --- a/packages/coding-agent/src/eval/js/shared/prelude.txt
 +++ b/packages/coding-agent/src/eval/js/shared/prelude.txt
 @@ -439,8 +439,8 @@ if (!globalThis.__omp_js_prelude_loaded__) {
  				"agent",
  				opts,
  				rest,
--				["agent", "label", "schema", "isolated", "apply", "merge", "schemaMode", "tools", "model"],
--				"{ agent, label, schema, schemaMode, isolated, apply, merge, tools, model }",
-+				["agent", "label", "schema", "isolated", "apply", "merge", "schemaMode", "tools", "model", "routing"],
-+				"{ agent, label, schema, schemaMode, isolated, apply, merge, tools, model, routing }",
+-				["agent", "label", "schema", "isolated", "apply", "merge", "schemaMode", "tools"],
+-				"{ agent, label, schema, schemaMode, isolated, apply, merge, tools }",
++				["agent", "label", "schema", "isolated", "apply", "merge", "schemaMode", "tools", "routing"],
++				"{ agent, label, schema, schemaMode, isolated, apply, merge, tools, routing }",
  			);
  			const result = await globalThis.__omp_call_tool__("__agent__", { prompt, ...options });
  			if (!result || typeof result.id !== "string") throw new Error("agent() did not return a handle");
@@ -81,29 +81,29 @@ index b43a9aff18..c6d5074048 100644
  			"workpool",
  			opts,
  			rest,
--			["name", "context", "tools", "model"],
--			"{ name, context, tools, model }",
-+			["name", "context", "tools", "model", "routing"],
-+			"{ name, context, tools, model, routing }",
+-			["name", "context", "tools"],
+-			"{ name, context, tools }",
++			["name", "context", "tools", "routing"],
++			"{ name, context, tools, routing }",
  		);
  		const result = await globalThis.__omp_call_tool__("__workpool__", {
  			op: "create",
 diff --git a/packages/coding-agent/src/eval/py/prelude.py b/packages/coding-agent/src/eval/py/prelude.py
-index 9b233ba235..cefebee32f 100644
+index 0505acb573..d9bef3702f 100644
 --- a/packages/coding-agent/src/eval/py/prelude.py
 +++ b/packages/coding-agent/src/eval/py/prelude.py
-@@ -1001,6 +1001,7 @@ if "__omp_prelude_loaded__" not in globals():
+@@ -1003,6 +1003,7 @@ if "__omp_prelude_loaded__" not in globals():
+         apply=None,
          merge=None,
          tools=None,
-         model=None,
 +        routing=None,
      ):
          """Start a background subagent and return its handle."""
          args = {"prompt": prompt}
 @@ -1022,6 +1023,8 @@ if "__omp_prelude_loaded__" not in globals():
+             args["merge"] = bool(merge)
+         if tools is not None:
              args["tools"] = list(tools)
-         if model is not None:
-             args["model"] = model
 +        if routing is not None:
 +            args["routing"] = routing
          result = _bridge_call("__agent__", args)
@@ -113,22 +113,22 @@ index 9b233ba235..cefebee32f 100644
          def __repr__(self):
              return f"<workpool {self.name} ({self.agent}) {self.limit} agents>"
  
--    def workpool(agent=None, *, name=None, context=None, tools=None, model=None):
-+    def workpool(agent=None, *, name=None, context=None, tools=None, model=None, routing=None):
+-    def workpool(agent=None, *, name=None, context=None, tools=None):
++    def workpool(agent=None, *, name=None, context=None, tools=None, routing=None):
          """Create a pool of keep-alive subagents."""
          args = {"op": "create"}
          if agent is not None:
-@@ -1080,6 +1083,8 @@ if "__omp_prelude_loaded__" not in globals():
+@@ -1078,6 +1081,8 @@ if "__omp_prelude_loaded__" not in globals():
+             args["context"] = context
+         if tools is not None:
              args["tools"] = list(tools)
-         if model is not None:
-             args["model"] = model
 +        if routing is not None:
 +            args["routing"] = routing
          result = _bridge_call("__workpool__", args)
          if not isinstance(result, dict) or not isinstance(result.get("name"), str):
              raise RuntimeError("workpool() did not return a pool")
 diff --git a/packages/coding-agent/src/eval/workpool-bridge.ts b/packages/coding-agent/src/eval/workpool-bridge.ts
-index 3825fa6b2e..b35eb98a77 100644
+index b60a715619..4de8e379b8 100644
 --- a/packages/coding-agent/src/eval/workpool-bridge.ts
 +++ b/packages/coding-agent/src/eval/workpool-bridge.ts
 @@ -55,6 +55,15 @@ function optionalTools(args: Record<string, unknown>): string[] | undefined {
@@ -147,24 +147,24 @@ index 3825fa6b2e..b35eb98a77 100644
  function getPool(options: EvalWorkpoolBridgeOptions, name: string) {
  	const ownerId = options.session.getAgentId?.() ?? MAIN_AGENT_ID;
  	const pool = WorkPoolRegistry.global().get(ownerId, name);
-@@ -77,6 +86,7 @@ export async function runEvalWorkpool(args: unknown, options: EvalWorkpoolBridge
- 		if (modelProblem) throw new ToolError(modelProblem);
- 		// The shared validator rejects non-string elements and empty selectors.
- 		const model = record.model as string | string[] | undefined;
+@@ -73,6 +82,7 @@ export async function runEvalWorkpool(args: unknown, options: EvalWorkpoolBridge
+ 		const requestedName = optionalString(record, "name");
+ 		const context = optionalString(record, "context");
+ 		const tools = optionalTools(record);
 +		const routing = optionalRouting(record);
  		if (tools?.length && options.session.getPlanModeState?.()?.enabled === true) {
  			throw new ToolError("Eval-defined tools are unavailable in plan mode.");
  		}
-@@ -86,6 +96,7 @@ export async function runEvalWorkpool(args: unknown, options: EvalWorkpoolBridge
+@@ -81,6 +91,7 @@ export async function runEvalWorkpool(args: unknown, options: EvalWorkpoolBridge
+ 			invocationKind: "eval",
  			assignment: `Create workpool ${requestedName ?? agent ?? "worker"}`,
  			...(agent ? { agent } : {}),
- 			...(model !== undefined ? { model } : {}),
 +			...(routing !== undefined ? { routing } : {}),
  		});
  		const customTools = tools?.length
  			? createEvalCustomTools(options.session, await describeEvalTools(options.session, tools, options.signal))
-@@ -106,6 +117,7 @@ export async function runEvalWorkpool(args: unknown, options: EvalWorkpoolBridge
- 			...(model !== undefined ? { model } : {}),
+@@ -100,6 +111,7 @@ export async function runEvalWorkpool(args: unknown, options: EvalWorkpoolBridge
+ 			policy,
  			...(context ? { context } : {}),
  			customTools,
 +			...(routing !== undefined ? { routing } : {}),
@@ -172,7 +172,7 @@ index 3825fa6b2e..b35eb98a77 100644
  		options.emitStatus?.({ op: "workpool", action: "create", pool: name, count: pool.limit() });
  		return { name, agent: policy.agentName, limit: pool.limit() };
 diff --git a/packages/coding-agent/src/extensibility/extensions/runner.ts b/packages/coding-agent/src/extensibility/extensions/runner.ts
-index 36fbdd9277..740878b49c 100644
+index a667b81667..a1bbe7fb09 100644
 --- a/packages/coding-agent/src/extensibility/extensions/runner.ts
 +++ b/packages/coding-agent/src/extensibility/extensions/runner.ts
 @@ -1520,8 +1520,12 @@ export class ExtensionRunner {
@@ -189,7 +189,7 @@ index 36fbdd9277..740878b49c 100644
  							);
  						} catch (error) {
  							handlerFailure = { error };
-@@ -2166,7 +2170,7 @@ export class ExtensionRunner {
+@@ -2162,7 +2166,7 @@ export class ExtensionRunner {
  	): Promise<BeforeSubagentSpawnEventResult | undefined> {
  		if (!this.hasHandlers("before_subagent_spawn")) return undefined;
  		const ctx = this.createContext();
@@ -198,7 +198,7 @@ index 36fbdd9277..740878b49c 100644
  
  		for (const ext of this.extensions) {
  			const handlers = ext.handlers.get("before_subagent_spawn");
-@@ -2179,13 +2183,17 @@ export class ExtensionRunner {
+@@ -2175,13 +2179,17 @@ export class ExtensionRunner {
  					ctx,
  					ext,
  					extensionHandlerTimeoutMs,
@@ -219,7 +219,7 @@ index 36fbdd9277..740878b49c 100644
  		}
  
 diff --git a/packages/coding-agent/src/extensibility/extensions/types.ts b/packages/coding-agent/src/extensibility/extensions/types.ts
-index 3dec4e6ac2..2391d9eafe 100644
+index 025373940f..7230a95a09 100644
 --- a/packages/coding-agent/src/extensibility/extensions/types.ts
 +++ b/packages/coding-agent/src/extensibility/extensions/types.ts
 @@ -791,6 +791,8 @@ export interface ResourcesDiscoverResult {
@@ -275,10 +275,10 @@ index 8f8db4b27b..4fb20ae7da 100644
  // Skills
  export * from "./extensibility/skills";
 diff --git a/packages/coding-agent/src/session/turn-recovery.ts b/packages/coding-agent/src/session/turn-recovery.ts
-index 2ae6c2470c..e5f803617a 100644
+index 65243243fe..aa229776e7 100644
 --- a/packages/coding-agent/src/session/turn-recovery.ts
 +++ b/packages/coding-agent/src/session/turn-recovery.ts
-@@ -1791,7 +1791,13 @@ export class TurnRecovery {
+@@ -1780,7 +1780,13 @@ export class TurnRecovery {
  		currentModel: Model | null | undefined = this.#host.model(),
  		options?: { pinnedRole?: string; roleHint?: string },
  	): string[] {
@@ -294,10 +294,10 @@ index 2ae6c2470c..e5f803617a 100644
  		if (!pinned) return current ? [current] : [];
  		return current && current !== pinned ? [pinned, current] : [pinned];
 diff --git a/packages/coding-agent/src/task/executor.ts b/packages/coding-agent/src/task/executor.ts
-index 6ff567cfb9..cab79c7b63 100644
+index f43469de75..1222eb4be8 100644
 --- a/packages/coding-agent/src/task/executor.ts
 +++ b/packages/coding-agent/src/task/executor.ts
-@@ -304,10 +304,15 @@ function installSubagentRetryFallbackChain(args: {
+@@ -311,10 +311,15 @@ function installSubagentRetryFallbackChain(args: {
  	);
  	if (selectedIndex < 0) return undefined;
  	const fallbackSelectors = candidates.slice(selectedIndex + 1).map(candidate => candidate.selector);
@@ -317,10 +317,10 @@ index 6ff567cfb9..cab79c7b63 100644
  		!fallbackChain.every(entry => typeof entry === "string")
  	) {
 diff --git a/packages/coding-agent/src/task/index.ts b/packages/coding-agent/src/task/index.ts
-index 809ed8c2f0..9124234644 100644
+index 8615f534d7..9fa3f314d9 100644
 --- a/packages/coding-agent/src/task/index.ts
 +++ b/packages/coding-agent/src/task/index.ts
-@@ -236,6 +236,12 @@ function validateShapeParams(batchEnabled: boolean, params: TaskParams): string
+@@ -226,6 +226,12 @@ function validateShapeParams(batchEnabled: boolean, params: TaskParams): string
   * undefined when valid.
   */
  
@@ -333,45 +333,45 @@ index 809ed8c2f0..9124234644 100644
  /** Reject an out-of-range `effort` selector on internal/stale-transcript calls that bypass the wire schema. */
  function validateEffort(effort: TaskEffort | undefined, label: string): string | undefined {
  	if (effort === undefined || TASK_EFFORTS.includes(effort)) return undefined;
-@@ -262,6 +268,8 @@ function validateSpawnParams(params: TaskParams, batchEnabled: boolean): string
+@@ -247,8 +253,11 @@ function validateSpawnParams(params: TaskParams, batchEnabled: boolean): string
+ 			if (!item || typeof item.task !== "string" || item.task.trim() === "") {
+ 				return `Task ${i + 1}${item?.name ? ` (\`${item.name}\`)` : ""} is missing \`task\`. Every task needs complete, self-contained instructions.`;
+ 			}
+-			const effortError = validateEffort(item.effort, `Task ${i + 1}${item.name ? ` (\`${item.name}\`)` : ""}`);
++			const label = `Task ${i + 1}${item.name ? ` (\`${item.name}\`)` : ""}`;
++			const effortError = validateEffort(item.effort, label);
  			if (effortError) return effortError;
- 			const modelError = invalidModelSelectorReason(item.model, label);
- 			if (modelError) return modelError;
 +			const routingError = validateRouting(item.routing, label);
 +			if (routingError) return routingError;
  		}
  		const seen = new Map<string, string>();
  		for (const item of tasks) {
-@@ -284,7 +292,11 @@ function validateSpawnParams(params: TaskParams, batchEnabled: boolean): string
+@@ -271,7 +280,7 @@ function validateSpawnParams(params: TaskParams, batchEnabled: boolean): string
  			? "Missing `tasks`. Provide a `tasks` array (one subagent per item) with a shared `context`."
  			: "Missing `task`. Provide complete, self-contained instructions for the agent.";
  	}
--	return validateEffort(params.effort, "The call") ?? invalidModelSelectorReason(params.model, "The call");
-+	return (
-+		validateRouting(params.routing, "The call") ??
-+		validateEffort(params.effort, "The call") ??
-+		invalidModelSelectorReason(params.model, "The call")
-+	);
+-	return validateEffort(params.effort, "The call");
++	return validateRouting(params.routing, "The call") ?? validateEffort(params.effort, "The call");
  }
  
  /**
-@@ -303,6 +315,7 @@ function resolveSpawnItems(params: TaskParams): TaskItem[] {
+@@ -290,6 +299,7 @@ function resolveSpawnItems(params: TaskParams): TaskItem[] {
  	if ("schemaMode" in params) item.schemaMode = params.schemaMode;
  	if ("tools" in params) item.tools = params.tools;
  	if ("effort" in params) item.effort = params.effort;
 +	if ("routing" in params) item.routing = params.routing;
- 	if ("model" in params) item.model = params.model;
  	if ("isolated" in params) item.isolated = params.isolated;
  	return [item];
-@@ -328,6 +341,7 @@ function spawnParamsFor(params: TaskParams, item: TaskItem, defaultAgent: string
+ }
+@@ -313,6 +323,7 @@ function spawnParamsFor(params: TaskParams, item: TaskItem, defaultAgent: string
+ 	if ("schemaMode" in item) spawn.schemaMode = item.schemaMode;
  	if ("tools" in item) spawn.tools = item.tools;
  	if ("effort" in item) spawn.effort = item.effort;
- 	if ("model" in item) spawn.model = item.model;
 +	if ("routing" in item) spawn.routing = item.routing;
  	if (item.isolated !== undefined) {
  		spawn.isolated = item.isolated;
  	} else if ("isolated" in params) {
-@@ -1634,6 +1648,7 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
+@@ -1618,6 +1629,7 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
  				assignment,
  				context,
  				agent: params.agent,
@@ -380,10 +380,10 @@ index 809ed8c2f0..9124234644 100644
  				...(Object.hasOwn(params, "schemaMode") ? { schemaMode: params.schemaMode } : {}),
  				...(params.effort !== undefined ? { effort: params.effort } : {}),
 diff --git a/packages/coding-agent/src/task/structured-subagent.ts b/packages/coding-agent/src/task/structured-subagent.ts
-index b9e41e62e4..3734121769 100644
+index a9df99e6da..ed2e5012c3 100644
 --- a/packages/coding-agent/src/task/structured-subagent.ts
 +++ b/packages/coding-agent/src/task/structured-subagent.ts
-@@ -7,9 +7,14 @@
+@@ -7,9 +7,18 @@
  import * as fs from "node:fs/promises";
  import * as os from "node:os";
  import path from "node:path";
@@ -393,12 +393,17 @@ index b9e41e62e4..3734121769 100644
 +import { concreteThinkingLevel, toReasoningEffort } from "@oh-my-pi/pi-tui/thinking";
  import { $env, prompt, Snowflake } from "@oh-my-pi/pi-utils";
  import { shortenPath } from "@oh-my-pi/pi-tui/render/render-utils";
- import {
+-import { resolveAgentModelSelection, resolveConfiguredModelPatterns } from "../config/model-resolver";
++import {
 +	formatModelStringWithRouting,
- 	modelSelectionInheritsSessionModel,
- 	normalizeModelPatternList,
- 	resolveAgentModelSelection,
-@@ -113,6 +118,8 @@ export interface StructuredSubagentRequest {
++	resolveAgentModelSelection,
++	resolveConfiguredModelPatterns,
++	resolveModelOverride,
++} from "../config/model-resolver";
+ import { type OAuthAccountPools, validateAgentAccountPools } from "../config/account-pools";
+ import {
+ 	type CompactionThresholdPair,
+@@ -110,6 +119,8 @@ export interface StructuredSubagentRequest {
  	context?: string;
  	agent?: string;
  	model?: string | string[];
@@ -407,7 +412,7 @@ index b9e41e62e4..3734121769 100644
  	/** Presence, rather than truthiness, makes this the highest-priority schema. */
  	outputSchema?: unknown;
  	schemaMode?: StructuredSubagentSchemaMode;
-@@ -507,6 +514,48 @@ export async function resolveEffectiveSubagentPolicy(
+@@ -436,6 +447,48 @@ export async function resolveEffectiveSubagentPolicy(
  	};
  }
  
@@ -456,7 +461,7 @@ index b9e41e62e4..3734121769 100644
  /**
   * Fire `before_subagent_spawn` for an actual child dispatch. Kept out of
   * {@link resolveEffectiveSubagentPolicy} because frontends run that as a
-@@ -517,35 +566,113 @@ async function applySpawnHook(
+@@ -446,30 +499,110 @@ async function applySpawnHook(
  	request: StructuredSubagentRequest,
  	policy: EffectiveSubagentPolicy,
  ): Promise<EffectiveSubagentPolicy> {
@@ -494,16 +499,7 @@ index b9e41e62e4..3734121769 100644
 +	if (decision === undefined) return policy;
 +	if (typeof decision !== "object" || decision === null || Array.isArray(decision)) {
 +		throw new StructuredSubagentError("preflight", "before_subagent_spawn returned an invalid result");
- 	}
--	if (spawnResult?.model === undefined) return policy;
--	const replacement = resolveConfiguredModelPatterns(spawnResult.model, request.session.settings);
--	if (replacement.length === 0) return policy;
--	return {
--		...policy,
--		modelOverride: replacement,
--		modelRoute: spawnResult.note,
--		modelInheritsLiveThinkingLevel: undefined,
--	};
++	}
 +	if (decision.block !== undefined && typeof decision.block !== "boolean") {
 +		throw new StructuredSubagentError("preflight", "before_subagent_spawn returned an invalid block value");
 +	}
@@ -554,8 +550,6 @@ index b9e41e62e4..3734121769 100644
 +	if (replacement !== undefined && !modelLocked) {
 +		nextPolicy.modelOverride = replacement;
 +		nextPolicy.modelRoute = decision.note;
-+		// Routed patterns no longer carry the parent's live effort.
-+		nextPolicy.modelInheritsLiveThinkingLevel = undefined;
 +	}
 +	if (decision.thinkingLevel !== undefined && decision.thinkingLevel !== ThinkingLevel.Inherit && !effortLocked) {
 +		// Pin the resolved model so an inherited selector suffix cannot override the chosen effort.
@@ -571,19 +565,22 @@ index b9e41e62e4..3734121769 100644
 +				...(appliedModelIndex >= 0 && replacement ? replacement.slice(appliedModelIndex + 1) : []),
 +			];
 +			nextPolicy.modelRole = undefined;
-+			nextPolicy.modelInheritsLiveThinkingLevel = undefined;
 +		}
 +		nextPolicy.effectiveAgent = {
 +			...policy.effectiveAgent,
 +			thinkingLevel: decision.thinkingLevel,
 +		};
-+	}
+ 	}
+-	if (spawnResult?.model === undefined) return policy;
+-	const replacement = resolveConfiguredModelPatterns(spawnResult.model, request.session.settings);
+-	if (replacement.length === 0) return policy;
+-	return { ...policy, modelOverride: replacement, modelRoute: spawnResult.note };
 +	return nextPolicy;
  }
  
  /** Reserve a session-global agent id only after preflight has succeeded. */
 diff --git a/packages/coding-agent/src/task/types.ts b/packages/coding-agent/src/task/types.ts
-index 00031bfd38..a2336d5659 100644
+index 00863b852f..68d0889fb9 100644
 --- a/packages/coding-agent/src/task/types.ts
 +++ b/packages/coding-agent/src/task/types.ts
 @@ -44,11 +44,13 @@ export interface SubagentEventPayload {
@@ -598,69 +595,69 @@ index 00031bfd38..a2336d5659 100644
  	task: "string",
 +	"routing?": routingRule,
  	solutionSpace: "string",
- 	"model?": "string | string[]",
  	"outputSchema?": outputSchemaInputSchema,
-@@ -61,6 +63,7 @@ const taskItemSchemaIsolated = type({
+ 	"schemaMode?": '"permissive" | "strict"',
+@@ -60,6 +62,7 @@ const taskItemSchemaIsolated = type({
  	agent: "string = 'task'",
  	task: "string",
  	solutionSpace: "string",
 +	"routing?": routingRule,
- 	"model?": "string | string[]",
  	"outputSchema?": outputSchemaInputSchema,
  	"schemaMode?": '"permissive" | "strict"',
-@@ -74,6 +77,7 @@ export const taskSchema = type({
+ 	"tools?": "string[]",
+@@ -72,6 +75,7 @@ export const taskSchema = type({
  	agent: "string = 'task'",
  	task: "string",
  	solutionSpace: "string",
 +	"routing?": routingRule,
- 	"model?": "string | string[]",
  	"outputSchema?": outputSchemaInputSchema,
  	"schemaMode?": '"permissive" | "strict"',
-@@ -85,6 +89,7 @@ const taskSchemaNoIsolation = type({
+ 	"tools?": "string[]",
+@@ -82,6 +86,7 @@ const taskSchemaNoIsolation = type({
  	"name?": "string",
  	agent: "string = 'task'",
  	task: "string",
 +	"routing?": routingRule,
  	solutionSpace: "string",
- 	"model?": "string | string[]",
  	"outputSchema?": outputSchemaInputSchema,
-@@ -139,6 +144,7 @@ function createTaskSchema(options: {
+ 	"schemaMode?": '"permissive" | "strict"',
+@@ -133,6 +138,7 @@ function createTaskSchema(options: {
  				agent,
  				task: "string",
  				solutionSpace: "string",
 +				"routing?": routingRule,
  				...effortField,
- 				"model?": "string | string[]",
  				"outputSchema?": outputSchemaInputSchema,
-@@ -159,6 +165,7 @@ function createTaskSchema(options: {
+ 				"schemaMode?": '"permissive" | "strict"',
+@@ -151,6 +157,7 @@ function createTaskSchema(options: {
  			agent,
  			task: "string",
  			solutionSpace: "string",
 +			"routing?": routingRule,
  			...effortField,
- 			"model?": "string | string[]",
  			"outputSchema?": outputSchemaInputSchema,
-@@ -179,6 +186,7 @@ function createTaskSchema(options: {
+ 			"schemaMode?": '"permissive" | "strict"',
+@@ -169,6 +176,7 @@ function createTaskSchema(options: {
  			agent,
  			task: "string",
  			solutionSpace: "string",
 +			"routing?": routingRule,
  			...effortField,
- 			"model?": "string | string[]",
  			"outputSchema?": outputSchemaInputSchema,
-@@ -192,6 +200,7 @@ function createTaskSchema(options: {
+ 			"schemaMode?": '"permissive" | "strict"',
+@@ -181,6 +189,7 @@ function createTaskSchema(options: {
  		"name?": "string",
  		agent,
  		task: "string",
 +		"routing?": routingRule,
  		solutionSpace: "string",
  		...effortField,
- 		"model?": "string | string[]",
+ 		"outputSchema?": outputSchemaInputSchema,
 diff --git a/packages/coding-agent/src/task/workpool.ts b/packages/coding-agent/src/task/workpool.ts
-index a4fac9acf6..9195d4c69b 100644
+index 3d3d017488..d062e75a6d 100644
 --- a/packages/coding-agent/src/task/workpool.ts
 +++ b/packages/coding-agent/src/task/workpool.ts
-@@ -94,6 +94,8 @@ export interface WorkPoolCreateOptions {
+@@ -92,6 +92,8 @@ export interface WorkPoolCreateOptions {
  	policy: EffectiveSubagentPolicy;
  	context?: string;
  	customTools?: CustomTool[];
@@ -669,35 +666,35 @@ index a4fac9acf6..9195d4c69b 100644
  }
  
  interface TurnOutcome {
-@@ -115,6 +117,7 @@ export class WorkPool {
- 	readonly #model?: string | string[];
+@@ -112,6 +114,7 @@ export class WorkPool {
+ 	readonly policy: EffectiveSubagentPolicy;
  	readonly context?: string;
  	readonly customTools: CustomTool[];
 +	readonly routing: "auto" | "off";
  	readonly freshAgents: boolean;
  	readonly agents: WorkPoolAgent[] = [];
  	readonly items: WorkPoolItem[] = [];
-@@ -134,6 +137,7 @@ export class WorkPool {
+@@ -131,6 +134,7 @@ export class WorkPool {
  		this.name = options.name;
  		this.ownerId = session.getAgentId?.() ?? MAIN_AGENT_ID;
  		this.session = session;
 +		this.routing = options.routing ?? "auto";
  		this.policy = options.policy;
- 		this.#model = Array.isArray(options.model) ? [...options.model] : options.model;
  		this.context = options.context;
-@@ -389,6 +393,7 @@ export class WorkPool {
+ 		this.customTools = options.customTools ?? [];
+@@ -384,6 +388,7 @@ export class WorkPool {
+ 							assignment: message,
  							...(this.context ? { context: this.context } : {}),
  							agent: this.policy.agentName,
- 							...(this.#model !== undefined ? { model: this.#model } : {}),
 +							routing: this.routing,
  							identity: { id: agent.id },
  							customTools: this.customTools,
  							outputSchema,
 diff --git a/packages/coding-agent/test/agent-session-retry-fallback.test.ts b/packages/coding-agent/test/agent-session-retry-fallback.test.ts
-index d1956b4437..e24637edab 100644
+index e0aebe17b4..3ac13f1bb4 100644
 --- a/packages/coding-agent/test/agent-session-retry-fallback.test.ts
 +++ b/packages/coding-agent/test/agent-session-retry-fallback.test.ts
-@@ -5534,6 +5534,130 @@ describe("AgentSession retry fallback", () => {
+@@ -5634,6 +5634,130 @@ describe("AgentSession retry fallback", () => {
  		expect(session.model?.id).toBe(primaryModel.id);
  		expect(session.thinkingLevel).toBeUndefined();
  	});
@@ -829,7 +826,7 @@ index d1956b4437..e24637edab 100644
  	it("clamps a fallback selector's explicit thinking level to the session effort ceiling", async () => {
  		const primaryModel = getBundledModel("anthropic", "claude-sonnet-4-5");
 diff --git a/packages/coding-agent/test/extensions-runner.test.ts b/packages/coding-agent/test/extensions-runner.test.ts
-index c6c6c80bf0..13940029f0 100644
+index 079e034fcb..82f1f42216 100644
 --- a/packages/coding-agent/test/extensions-runner.test.ts
 +++ b/packages/coding-agent/test/extensions-runner.test.ts
 @@ -10,6 +10,7 @@ import type { AgentMessage, AgentTool, AgentToolContext } from "@oh-my-pi/pi-age
@@ -985,7 +982,7 @@ index 05b0c9b0f0..45c4cddcc9 100644
  		expect(result.modelOverride).toEqual(["primary/bad-runtime-model", "fallback/working-model"]);
  		expect(result.resolvedModel).toBe("fallback/working-model");
 diff --git a/packages/coding-agent/test/task/structured-subagent.test.ts b/packages/coding-agent/test/task/structured-subagent.test.ts
-index 603986d7cc..034db32aae 100644
+index c8f0a42b73..ce8fb558d9 100644
 --- a/packages/coding-agent/test/task/structured-subagent.test.ts
 +++ b/packages/coding-agent/test/task/structured-subagent.test.ts
 @@ -1,4 +1,4 @@
@@ -994,7 +991,7 @@ index 603986d7cc..034db32aae 100644
  import * as fs from "node:fs/promises";
  import * as os from "node:os";
  import path from "node:path";
-@@ -7,6 +7,8 @@ import { normalizeModelPatternList, resolveModelOverride } from "@oh-my-pi/pi-co
+@@ -12,6 +12,8 @@ import {
  import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
  import type { AgentCompactionThresholdOverride } from "@oh-my-pi/pi-coding-agent/config/compaction-threshold";
  import type { BeforeSubagentSpawnEvent } from "@oh-my-pi/pi-coding-agent/extensibility/extensions/types";
@@ -1003,7 +1000,7 @@ index 603986d7cc..034db32aae 100644
  import {
  	artifactsDirsFromRegistry,
  	resetRegisteredArtifactDirsForTests,
-@@ -132,6 +134,21 @@ afterEach(() => {
+@@ -122,6 +124,21 @@ afterEach(() => {
  	vi.restoreAllMocks();
  	resetRegisteredArtifactDirsForTests();
  });
@@ -1025,7 +1022,7 @@ index 603986d7cc..034db32aae 100644
  
  describe("structured subagent primitive", () => {
  	it("resolves user-tagged model agents for task and eval but rejects untagged names", async () => {
-@@ -607,7 +624,9 @@ describe("structured subagent primitive", () => {
+@@ -505,7 +522,9 @@ describe("structured subagent primitive", () => {
  		await resolveEffectiveSubagentPolicy(request({ session: childSession }));
  		expect(events).toEqual([]);
  
@@ -1036,7 +1033,7 @@ index 603986d7cc..034db32aae 100644
  		expect(dispatched[0]).toMatchObject({
  			modelOverride: ["openai/gpt-4o"],
  			modelRole: "definition",
-@@ -618,6 +637,11 @@ describe("structured subagent primitive", () => {
+@@ -516,6 +535,11 @@ describe("structured subagent primitive", () => {
  				type: "before_subagent_spawn",
  				agent: "worker",
  				invocationKind: "task",
@@ -1048,7 +1045,7 @@ index 603986d7cc..034db32aae 100644
  				modelRole: "definition",
  				patterns: ["anthropic/claude-opus-4-5"],
  			},
-@@ -1097,6 +1121,138 @@ describe("structured subagent primitive", () => {
+@@ -995,4 +1019,136 @@ describe("structured subagent primitive", () => {
  		expect(await fs.stat(artifactsDir ?? "")).toBeDefined();
  		await fs.rm(settled.artifactsDir, { recursive: true, force: true });
  	});
@@ -1113,7 +1110,7 @@ index 603986d7cc..034db32aae 100644
 +		]);
 +		expect(dispatched[0]?.thinkingLevel).toBe(ThinkingLevel.Off);
 +	});
-+	it("stops inheriting the parent's live effort once a route replaces an inherited model", async () => {
++	it("replaces an inherited model without restoring the removed live-effort flag", async () => {
 +		mockDiscovery();
 +		const parent = "anthropic/claude-sonnet-4-5:high";
 +		const route = routingSession({ model: "openai/gpt-4o-mini:low" });
@@ -1127,9 +1124,9 @@ index 603986d7cc..034db32aae 100644
 +		const baseline = await resolveEffectiveSubagentPolicy(request({ session: route.session }));
 +		await runStructuredSubagent(request({ session: route.session, retainArtifacts: true }));
 +
-+		expect(baseline.modelInheritsLiveThinkingLevel).toBe(true);
++		expect(baseline).not.toHaveProperty("modelInheritsLiveThinkingLevel");
 +		expect(dispatched[0]?.modelOverride).toEqual(["openai/gpt-4o-mini:low"]);
-+		expect(dispatched[0]?.modelInheritsLiveThinkingLevel ?? false).toBe(false);
++		expect(dispatched[0]).not.toHaveProperty("modelInheritsLiveThinkingLevel");
 +	});
 +
 +	it("skips routing when opted out and preserves explicit model locks", async () => {
@@ -1185,13 +1182,11 @@ index 603986d7cc..034db32aae 100644
 +		expect(dispatch).not.toHaveBeenCalled();
 +	});
  });
- 
- describe("per-call selector syntax", () => {
 diff --git a/packages/coding-agent/test/task/wire-schema.test.ts b/packages/coding-agent/test/task/wire-schema.test.ts
-index ae95684d01..c117cf9e24 100644
+index b1a093e324..89f9810bee 100644
 --- a/packages/coding-agent/test/task/wire-schema.test.ts
 +++ b/packages/coding-agent/test/task/wire-schema.test.ts
-@@ -130,6 +130,41 @@ describe("task wire schema", () => {
+@@ -116,6 +116,41 @@ describe("task wire schema", () => {
  		expect("role" in item).toBe(false);
  		expect(item.task).toBe("x");
  	});
@@ -1234,7 +1229,7 @@ index ae95684d01..c117cf9e24 100644
  
  // Contract: `agent` and `name` shape the spawned subagent's identity and the
 diff --git a/packages/coding-agent/test/task/workpool.test.ts b/packages/coding-agent/test/task/workpool.test.ts
-index 088f439421..47aad24cca 100644
+index ab91ad7c92..87b6149a83 100644
 --- a/packages/coding-agent/test/task/workpool.test.ts
 +++ b/packages/coding-agent/test/task/workpool.test.ts
 @@ -378,7 +378,7 @@ describe("WorkPool dispatch", () => {
@@ -1255,22 +1250,22 @@ index 088f439421..47aad24cca 100644
  		expect(workpool.batches.map(batch => batch.agentId)).toEqual(["fresh-1", "fresh-2"]);
  		expect(workpool.batches.every(batch => batch.items.length === 1)).toBe(true);
 diff --git a/packages/tui/src/tools/task.ts b/packages/tui/src/tools/task.ts
-index 65929a7080..d886cdcb33 100644
+index 2ab791a7b2..b1134d5b78 100644
 --- a/packages/tui/src/tools/task.ts
 +++ b/packages/tui/src/tools/task.ts
-@@ -2155,6 +2155,8 @@ export interface TaskItem {
+@@ -2210,6 +2210,8 @@ export interface TaskItem {
+ 	solutionSpace?: string;
+ 	/** Per-spawn thinking effort: lowest/middle/highest level the resolved model supports. Overrides the agent's default selector (e.g. `auto`). */
  	effort?: "lo" | "med" | "hi";
- 	/** Per-spawn model selector or ordered selector array; overrides agent and settings preferences. */
- 	model?: string | string[];
 +	/** Extension model routing mode for this worker. */
 +	routing?: "auto" | "off";
  	/** Caller-provided output schema; its presence overrides the selected agent's schema. */
  	outputSchema?: unknown;
  	/** Validation behavior for a caller-provided or inherited output schema. */
-@@ -2184,6 +2186,8 @@ export interface TaskParams {
+@@ -2237,6 +2239,8 @@ export interface TaskParams {
+ 	solutionSpace?: string;
+ 	/** Per-spawn thinking effort (flat form): lowest/middle/highest level the resolved model supports. */
  	effort?: "lo" | "med" | "hi";
- 	/** Per-spawn model selector or ordered selector array; overrides agent and settings preferences. */
- 	model?: string | string[];
 +	/** Extension model routing mode for this worker. */
 +	routing?: "auto" | "off";
  	/** Caller-provided output schema; its presence overrides the selected agent's schema. */
