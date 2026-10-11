@@ -404,6 +404,7 @@ describe("Throughput hierarchy and persona dispatch", () => {
 		const widgets: string[][] = [];
 		const makeContext = (sessionId: string, name: string, agent: ExtensionContext["agent"]) => ({
 			agent,
+			getAsyncJobSnapshot: () => null,
 			sessionManager: {
 				getSessionId: () => sessionId,
 				getSessionName: () => name,
@@ -472,6 +473,7 @@ describe("Throughput hierarchy and persona dispatch", () => {
 		const widgets: string[][] = [];
 		const makeContext = (sessionId: string, name: string, agent: ExtensionContext["agent"]) => ({
 			agent,
+			getAsyncJobSnapshot: () => null,
 			sessionManager: {
 				getSessionId: () => sessionId,
 				getSessionName: () => name,
@@ -546,6 +548,7 @@ describe("Throughput hierarchy and persona dispatch", () => {
 			onHeaderRead?: () => void,
 		) => ({
 			agent,
+			getAsyncJobSnapshot: () => null,
 			sessionManager: {
 				getSessionId: () => sessionId,
 				getSessionName: () => name,
@@ -728,6 +731,7 @@ describe("Throughput UI timer lifecycle", () => {
 		let nextTimer = 1;
 		const makeContext = (sessionId: string, name: string, agent: ExtensionContext["agent"]) => ({
 			agent,
+			getAsyncJobSnapshot: () => null,
 			sessionManager: {
 				getSessionId: () => sessionId,
 				getSessionName: () => name,
@@ -805,6 +809,7 @@ describe("Throughput native spinner parity", () => {
 		const widgets: string[][] = [];
 		const makeContext = (sessionId: string, name: string, agent: ExtensionContext["agent"]) => ({
 			agent,
+			getAsyncJobSnapshot: () => null,
 			sessionManager: {
 				getSessionId: () => sessionId,
 				getSessionName: () => name,
@@ -850,6 +855,80 @@ describe("Throughput native spinner parity", () => {
 			expect(["A", "B"]).toContain(workerRow?.[0]);
 		} finally {
 			workerHandlers.get("session_shutdown")?.({}, workerContext);
+			mainHandlers.get("session_shutdown")?.({}, mainContext);
+			if (previousRegistry === undefined) delete global[registryKey];
+			else global[registryKey] = previousRegistry;
+		}
+	});
+});
+
+describe("Throughput completion estimate column", () => {
+	test("shows a running worker's estimate beside its persona and keeps other rows aligned", () => {
+		const global = globalThis as Record<symbol, unknown>;
+		const registryKey = Symbol.for("omp.throughput.registry.v4");
+		const previousRegistry = global[registryKey];
+		delete global[registryKey];
+		const widgets: string[][] = [];
+		const snapshot = {
+			running: [
+				{ id: "job-a", type: "task", status: "running", label: "a", startTime: 0, agentId: "registry-pct-a", completionPercent: 40 },
+				{ id: "job-b", type: "task", status: "running", label: "b", startTime: 0, agentId: "registry-pct-b" },
+			],
+			recent: [],
+		};
+		const makeContext = (sessionId: string, name: string, agent: ExtensionContext["agent"]) => ({
+			agent,
+			getAsyncJobSnapshot: () => (agent.kind === "main" ? snapshot : null),
+			sessionManager: {
+				getSessionId: () => sessionId,
+				getSessionName: () => name,
+				getSessionFile: () => `/sessions/${sessionId}.jsonl`,
+				getHeader: () => ({}),
+			},
+			model: { id: "test/model" },
+			setInterval: () => 0,
+			clearTimer: () => {},
+			ui: {
+				theme: { fg: (_color: string, value: string) => value },
+				setWidget: (_name: string, lines: unknown) => {
+					if (Array.isArray(lines)) widgets.push(lines as string[]);
+				},
+			},
+		});
+		const createPi = () => {
+			const handlers = new Map<string, (event: unknown, ctx: unknown) => void>();
+			throughput({
+				on: (event: string, handler: unknown) => {
+					handlers.set(event, handler as (event: unknown, ctx: unknown) => void);
+				},
+				getThinkingLevel: () => "low",
+			} as unknown as Parameters<typeof throughput>[0]);
+			return handlers;
+		};
+		const mainContext = makeContext("pct-main", "main", { kind: "main", id: "registry-pct-main", name: "main", depth: 0 });
+		const workerA = makeContext("pct-a", "pctalpha", {
+			kind: "sub", id: "registry-pct-a", name: "task", depth: 1, parentId: "registry-pct-main",
+		});
+		const workerB = makeContext("pct-b", "pctbravo", {
+			kind: "sub", id: "registry-pct-b", name: "task", depth: 1, parentId: "registry-pct-main",
+		});
+		const mainHandlers = createPi();
+		const aHandlers = createPi();
+		const bHandlers = createPi();
+		try {
+			mainHandlers.get("session_start")?.({}, mainContext);
+			aHandlers.get("session_start")?.({}, workerA);
+			bHandlers.get("session_start")?.({}, workerB);
+			mainHandlers.get("session_start")?.({}, mainContext);
+			const rows = widgets.at(-1) ?? [];
+			const rowA = rows.find((line) => line.includes("pctalpha")) ?? "";
+			const rowB = rows.find((line) => line.includes("pctbravo")) ?? "";
+			expect(rowA).toContain(" 40% |");
+			expect(rowB).not.toContain("%");
+			expect(rowB.indexOf("|")).toBe(rowA.indexOf("|"));
+		} finally {
+			aHandlers.get("session_shutdown")?.({}, workerA);
+			bHandlers.get("session_shutdown")?.({}, workerB);
 			mainHandlers.get("session_shutdown")?.({}, mainContext);
 			if (previousRegistry === undefined) delete global[registryKey];
 			else global[registryKey] = previousRegistry;

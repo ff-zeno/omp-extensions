@@ -2,9 +2,12 @@
 
 `throughput` adds an above-editor widget with a header sparkline, TPS, TTFB, active and streaming counts, aggregate tokens, and worker tree rows.
 
-The worker tree preserves parent-child branches, orders active workers before completed workers, and shows at most eight rows before an overflow count.
+The worker tree preserves parent-child branches, orders active workers before completed workers, and shows at most 20 rows before an overflow count.
 
 Each worker row includes a status icon, worker name, persona chip, agent, model and thinking level, gauge, TPS, and token total.
+
+When OMP's async job snapshot carries `completionPercent`, a running subagent's latest completion estimate from OMP's completion probe (`task.completionProbe`) appears right after its persona chip.
+The column appears only while at least one shown worker has an estimate; stock OMP 18.8.4 does not expose the field, so it needs the patched build from `intelligent-auto-agents` or a release that includes the upstream change.
 
 The name, agent, and model columns resize with the terminal and truncate styled output without exceeding the available width.
 

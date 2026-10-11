@@ -85,7 +85,7 @@ const COMPLETED_RETENTION_MS = 3_000;
 const STALE_SESSION_MS = 10 * 60_000;
 const PENDING_SPAWN_TTL_MS = 60_000;
 const SPARK_LENGTH = 10;
-const MAX_WORKER_ROWS = 8;
+const MAX_WORKER_ROWS = 20;
 const GAUGE_FLOOR = 40;
 const SCALE_CAP = 250;
 const WORKER_GAUGE_WIDTH = 9;
@@ -992,6 +992,7 @@ export default function throughput(pi: ExtensionAPI): void {
 		scale: number,
 		timestamp: number,
 		cols: number,
+		completion: ReadonlyMap<string, number>,
 	): string {
 		refreshAvgTps(worker, timestamp);
 		const isComplete = worker.phase === "complete";
@@ -1005,6 +1006,12 @@ export default function throughput(pi: ExtensionAPI): void {
 		const branch = theme.fg("dim", prefix);
 		const model = theme.fg("dim", pad(`${worker.model}:${worker.thinkingLevel}`, modelWidth));
 		const persona = renderModeBadge(theme, worker);
+		// Subagent self-estimate from OMP's completion probe; the column exists only while some row has one.
+		const percent = completion.get(worker.agentId);
+		const percentCell =
+			completion.size === 0
+				? ""
+				: ` ${percent === undefined ? "    " : theme.fg("accent", `${Math.round(percent)}%`.padStart(4))}`;
 		const dimPipe = theme.fg("dim", "|");
 		// Drop the shared `-frontier` infix so reviewer seats keep their number in the narrow agent column.
 		const badge = agentBadgeColor(theme, worker.agent, pad(worker.agent.replace("-frontier-", "-"), agentWidth));
@@ -1014,7 +1021,7 @@ export default function throughput(pi: ExtensionAPI): void {
 		const gauge = renderGauge(theme, tps, scale, WORKER_GAUGE_WIDTH);
 		const rateStr = pad(`${formatRate(tps)} tps`, 9);
 		const styledRate = tps > 0 ? speedColor(theme, tps, rateStr) : theme.fg("dim", rateStr);
-		const row = `${icon} ${branch}${styledLabel}  ${persona} ${dimPipe} ${badge}  ${model}  ${gauge}  ${styledRate}  ${dimSeparator}  ${theme.fg("dim", totalTokens)}`;
+		const row = `${icon} ${branch}${styledLabel}  ${persona}${percentCell} ${dimPipe} ${badge}  ${model}  ${gauge}  ${styledRate}  ${dimSeparator}  ${theme.fg("dim", totalTokens)}`;
 		return truncateTerminalLine(row, cols);
 	}
 
@@ -1044,6 +1051,14 @@ export default function throughput(pi: ExtensionAPI): void {
 		}
 		workerScale = Math.min(SCALE_CAP, workerScale);
 
+		// Running subagents' completion estimates, keyed by agent registry id. Needs a build whose
+		// async job snapshot carries `completionPercent`; older builds simply show no column.
+		const completion = new Map<string, number>();
+		for (const job of ctx.getAsyncJobSnapshot()?.running ?? []) {
+			if (!job.agentId || !("completionPercent" in job)) continue;
+			const percent = job.completionPercent;
+			if (typeof percent === "number" && Number.isFinite(percent)) completion.set(job.agentId, percent);
+		}
 		const theme = ctx.ui.theme;
 		const cols = Math.max(1, process.stdout.columns ?? 100);
 		if (cols !== cachedCols) {
@@ -1104,6 +1119,7 @@ export default function throughput(pi: ExtensionAPI): void {
 					workerScale,
 					timestamp,
 					cols,
+					completion,
 				),
 			),
 		];
