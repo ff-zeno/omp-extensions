@@ -138,6 +138,20 @@ Adds `routing?: "auto" | "off"` to `TaskItem` and `TaskParams`.
 
 `test/agent-session-retry-fallback.test.ts`, `test/extensions-runner.test.ts`, `test/issue-2750-subagent-runtime-fallback.test.ts`, `test/task/structured-subagent.test.ts`, `test/task/wire-schema.test.ts`, and `test/task/workpool.test.ts` cover the new hook behavior, the routing schema, and the routed retry chain.
 
+## Carried change: subagent completion estimate in the async job snapshot
+
+The patch also carries one change unrelated to routing, for the `throughput` plugin.
+Stock OMP records each running subagent's completion self-estimate (the `task.completionProbe` setting) on its async job, but `ctx.getAsyncJobSnapshot()` does not return it, so extensions cannot show it.
+
+- `packages/coding-agent/src/async/job-manager.ts` adds `taskJobProgressRecord` and `taskJobCompletionPercent`.
+- `packages/coding-agent/src/async/job-control.ts` uses those helpers in `snapshotJobs` instead of its inline progress lookup, with no change in behavior.
+- `packages/coding-agent/src/session/agent-session-types.ts` adds optional `completionPercent` to `AsyncJobSnapshotItem`.
+- `packages/coding-agent/src/session/agent-session.ts` fills `completionPercent` for running jobs in `getAsyncJobSnapshot`.
+- `test/agent-session-async-delivery.test.ts` checks that the snapshot returns the job's own estimate when a batch reports several.
+
+The same change is proposed upstream as [can1357/oh-my-pi#15338](https://github.com/can1357/oh-my-pi/pull/15338).
+When a release contains it, drop these hunks when rebasing; `throughput` already ignores a missing field.
+
 ## Folding this patch into stock OMP instead
 
 Upstream may one day accept these changes.

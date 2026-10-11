@@ -26,6 +26,135 @@ index 76fb1cb950..28178e46c9 100644
  
  ## [18.8.4] - 2026-10-08
  
+diff --git a/packages/coding-agent/src/async/job-control.ts b/packages/coding-agent/src/async/job-control.ts
+index 5e29c9c399..454b6cd207 100644
+--- a/packages/coding-agent/src/async/job-control.ts
++++ b/packages/coding-agent/src/async/job-control.ts
+@@ -6,7 +6,14 @@
+ 
+ import type { AgentToolResult } from "@oh-my-pi/pi-agent-core";
+ 
+-import type { AsyncJob, AsyncJobDetails, AsyncJobManager, AsyncJobType } from "./job-manager";
++import {
++	type AsyncJob,
++	type AsyncJobDetails,
++	type AsyncJobManager,
++	type AsyncJobType,
++	taskJobCompletionPercent,
++	taskJobProgressRecord,
++} from "./job-manager";
+ 
+ import { renderStructuredJson, structuredStatusLabel } from "../session/async-job-delivery";
+ import { USER_INTERRUPT_LABEL } from "../session/messages";
+@@ -173,41 +180,25 @@ export function snapshotJobs(
+ 		let resolvedModelIdentity: string | undefined;
+ 		let resolvedThinkingLevel: JobSnapshot["resolvedThinkingLevel"];
+ 		let advisor = false;
+-		let completionPercent: number | undefined;
+-		if (latest.type === "task") {
+-			const progressValue = latest.latestDetails?.progress;
+-			if (Array.isArray(progressValue)) {
+-				let progressRecord: Record<string, unknown> | undefined;
+-				for (const item of progressValue) {
+-					if (!item || typeof item !== "object") continue;
+-					const candidate = item as Record<string, unknown>;
+-					if (!progressRecord) progressRecord = candidate;
+-					if (candidate.id === latest.id) {
+-						progressRecord = candidate;
+-						break;
+-					}
+-				}
+-				const modelValue = progressRecord?.resolvedModel;
+-				if (typeof modelValue === "string") {
+-					const trimmed = modelValue.trim();
+-					if (trimmed) resolvedModel = trimmed;
+-				}
+-				const identityValue = progressRecord?.resolvedModelIdentity;
+-				if (typeof identityValue === "string") {
+-					const trimmed = identityValue.trim();
+-					if (trimmed) resolvedModelIdentity = trimmed;
+-				}
+-				const thinkingValue = progressRecord?.resolvedThinkingLevel;
+-				if (typeof thinkingValue === "string") {
+-					resolvedThinkingLevel = parseConfiguredThinkingLevel(thinkingValue);
+-				}
+-				advisor = progressRecord?.advisor === true;
+-				const completionValue = progressRecord?.completionPercent;
+-				if (typeof completionValue === "number" && Number.isFinite(completionValue)) {
+-					completionPercent = completionValue;
+-				}
++		const progressRecord = taskJobProgressRecord(latest);
++		if (progressRecord) {
++			const modelValue = progressRecord.resolvedModel;
++			if (typeof modelValue === "string") {
++				const trimmed = modelValue.trim();
++				if (trimmed) resolvedModel = trimmed;
++			}
++			const identityValue = progressRecord.resolvedModelIdentity;
++			if (typeof identityValue === "string") {
++				const trimmed = identityValue.trim();
++				if (trimmed) resolvedModelIdentity = trimmed;
++			}
++			const thinkingValue = progressRecord.resolvedThinkingLevel;
++			if (typeof thinkingValue === "string") {
++				resolvedThinkingLevel = parseConfiguredThinkingLevel(thinkingValue);
+ 			}
++			advisor = progressRecord.advisor === true;
+ 		}
++		const completionPercent = taskJobCompletionPercent(latest);
+ 		return {
+ 			id: latest.id,
+ 			type: latest.type,
+@@ -219,7 +210,7 @@ export function snapshotJobs(
+ 			...(resolvedModelIdentity ? { resolvedModelIdentity } : {}),
+ 			...(resolvedThinkingLevel !== undefined ? { resolvedThinkingLevel } : {}),
+ 			...(advisor ? { advisor: true } : {}),
+-			...(completionPercent !== undefined && latest.status === "running" ? { completionPercent } : {}),
++			...(completionPercent !== undefined ? { completionPercent } : {}),
+ 			...(!resultConsumed && options.includeResults !== false && latest.resultText
+ 				? { resultText: latest.resultText }
+ 				: {}),
+diff --git a/packages/coding-agent/src/async/job-manager.ts b/packages/coding-agent/src/async/job-manager.ts
+index 5bd8f09ca5..8b283d9696 100644
+--- a/packages/coding-agent/src/async/job-manager.ts
++++ b/packages/coding-agent/src/async/job-manager.ts
+@@ -135,6 +135,36 @@ export interface AsyncJob {
+ 	retainedArtifactsCleanup?: () => Promise<void>;
+ }
+ 
++/**
++ * The subagent progress record a task job last reported: the `progress` entry
++ * whose `id` matches the job, else the first entry. Undefined for non-task jobs
++ * and for task jobs that have not reported progress yet.
++ */
++export function taskJobProgressRecord(
++	job: Pick<AsyncJob, "id" | "type" | "latestDetails">,
++): Record<string, unknown> | undefined {
++	if (job.type !== "task") return undefined;
++	const progress = job.latestDetails?.progress;
++	if (!Array.isArray(progress)) return undefined;
++	let record: Record<string, unknown> | undefined;
++	for (const item of progress) {
++		if (!item || typeof item !== "object") continue;
++		const candidate = item as Record<string, unknown>;
++		if (candidate.id === job.id) return candidate;
++		record ??= candidate;
++	}
++	return record;
++}
++
++/** A running task job's latest completion self-estimate (0–100), if the subagent reported one. */
++export function taskJobCompletionPercent(
++	job: Pick<AsyncJob, "id" | "type" | "latestDetails"> & { status: string },
++): number | undefined {
++	if (job.status !== "running") return undefined;
++	const value = taskJobProgressRecord(job)?.completionPercent;
++	return typeof value === "number" && Number.isFinite(value) ? value : undefined;
++}
++
+ /**
+  * The process a job runs, for job inspectors (the jobs sheet): set by bodies
+  * that spawn one (bash), absent for in-process work (eval, task).
 diff --git a/packages/coding-agent/src/eval/agent-bridge.ts b/packages/coding-agent/src/eval/agent-bridge.ts
 index ab279b7344..b0749547d0 100644
 --- a/packages/coding-agent/src/eval/agent-bridge.ts
@@ -274,6 +403,49 @@ index 8f8db4b27b..4fb20ae7da 100644
  // Hook system types (legacy re-export)
  // Skills
  export * from "./extensibility/skills";
+diff --git a/packages/coding-agent/src/session/agent-session-types.ts b/packages/coding-agent/src/session/agent-session-types.ts
+index 62f3799d8d..b37e6f8477 100644
+--- a/packages/coding-agent/src/session/agent-session-types.ts
++++ b/packages/coding-agent/src/session/agent-session-types.ts
+@@ -79,6 +79,12 @@ export type AsyncJobSnapshotItem = Pick<
+ > & {
+ 	/** Full command line of a job that runs a process; `label` is cut to 120 characters. */
+ 	command?: string;
++	/**
++	 * A running task job's latest completion self-estimate (0–100) from the
++	 * subagent completion probe (`task.completionProbe`). Absent until the first
++	 * estimate arrives and once the job settles.
++	 */
++	completionPercent?: number;
+ };
+ 
+ /** One async job as a job inspector (the jobs sheet) shows it beyond its snapshot row. */
+diff --git a/packages/coding-agent/src/session/agent-session.ts b/packages/coding-agent/src/session/agent-session.ts
+index f8372ca118..75824c7176 100644
+--- a/packages/coding-agent/src/session/agent-session.ts
++++ b/packages/coding-agent/src/session/agent-session.ts
+@@ -111,7 +111,12 @@ import { writeArchive } from "@oh-my-pi/pi-utils/ar";
+ import type { AdvisorConfig } from "@oh-my-pi/pi-tui/overlays/advisor-config";
+ import { formatUsageResetWindow } from "@oh-my-pi/pi-tui/overlays/usage-display";
+ import { loadAdvisorTranscriptCosts } from "../advisor";
+-import { ASYNC_JOB_MANAGER_SHUTDOWN_REASON, type AsyncJob, AsyncJobManager } from "../async";
++import {
++	ASYNC_JOB_MANAGER_SHUTDOWN_REASON,
++	type AsyncJob,
++	AsyncJobManager,
++	taskJobCompletionPercent,
++} from "../async";
+ import { reset as resetCapabilities } from "../capability";
+ import type { EffectiveExtensionRoots } from "../capability/types";
+ import type { SessionAccountPoolScope } from "../config/account-pools";
+@@ -2774,6 +2779,7 @@ export class AgentSession implements SettingsScope {
+ 			command: job.process?.command,
+ 			startTime: job.startTime,
+ 			agentId: job.agentId,
++			completionPercent: taskJobCompletionPercent(job),
+ 		}));
+ 		const recent = manager.getRecentJobs(options?.recentLimit ?? 5, ownerFilter).map(job => ({
+ 			id: job.id,
 diff --git a/packages/coding-agent/src/session/turn-recovery.ts b/packages/coding-agent/src/session/turn-recovery.ts
 index 65243243fe..aa229776e7 100644
 --- a/packages/coding-agent/src/session/turn-recovery.ts
@@ -690,6 +862,66 @@ index 3d3d017488..d062e75a6d 100644
  							identity: { id: agent.id },
  							customTools: this.customTools,
  							outputSchema,
+diff --git a/packages/coding-agent/test/agent-session-async-delivery.test.ts b/packages/coding-agent/test/agent-session-async-delivery.test.ts
+index 9695dee084..bcf84efcdc 100644
+--- a/packages/coding-agent/test/agent-session-async-delivery.test.ts
++++ b/packages/coding-agent/test/agent-session-async-delivery.test.ts
+@@ -171,6 +171,55 @@ describe("AgentSession owner-routed async delivery", () => {
+ 		expect(recent.find(job => job.id === "proc-job")?.command).toBe(command);
+ 	});
+ 
++	it("exposes a running task job's own completion estimate in the async job snapshot", async () => {
++		const model = getBundledModel("anthropic", "claude-sonnet-4-5")!;
++		const mock = createMockModel({ handler: () => ({ content: ["Done"] }) });
++		const agent = new Agent({
++			getApiKey: () => "test-key",
++			initialState: { model, systemPrompt: ["Test"], tools: [] },
++			convertToLlm,
++			streamFn: mock.stream,
++		});
++		const authStorage = await AuthStorage.create(":memory:");
++		authStorages.push(authStorage);
++		const manager = new AsyncJobManager({});
++		AsyncJobManager.setInstance(manager);
++		session = new AgentSession({
++			agent,
++			sessionManager: SessionManager.inMemory(),
++			settings: Settings.isolated(),
++			modelRegistry: new ModelRegistry(authStorage),
++			agentId: "Owner",
++			asyncJobManager: manager,
++		});
++
++		const reported = Promise.withResolvers<void>();
++		const gate = Promise.withResolvers<string>();
++		manager.register(
++			"task",
++			"subagent work",
++			async ({ reportProgress }) => {
++				// A batch reports every member's progress; only this job's own entry counts.
++				await reportProgress("working", {
++					progress: [
++						{ id: "sibling-job", completionPercent: 90 },
++						{ id: "task-job", completionPercent: 40 },
++					],
++				});
++				reported.resolve();
++				return gate.promise;
++			},
++			{ id: "task-job", ownerId: "Owner", agentId: "Worker" },
++		);
++		await reported.promise;
++
++		const running = session.getAsyncJobSnapshot()?.running ?? [];
++		expect(running.find(job => job.id === "task-job")?.completionPercent).toBe(40);
++
++		gate.resolve("done");
++		await session.settleAsyncWork();
++	});
++
+ 	it("does not spill an incomplete background capture as full output during follow-up delivery", async () => {
+ 		const model = getBundledModel("anthropic", "claude-sonnet-4-5")!;
+ 		const mock = createMockModel({ handler: () => ({ content: ["Done"] }) });
 diff --git a/packages/coding-agent/test/agent-session-retry-fallback.test.ts b/packages/coding-agent/test/agent-session-retry-fallback.test.ts
 index e0aebe17b4..3ac13f1bb4 100644
 --- a/packages/coding-agent/test/agent-session-retry-fallback.test.ts
