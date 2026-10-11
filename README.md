@@ -1,6 +1,6 @@
 # omp-extensions
 
-Oh My Pi marketplace with three plugins.
+Oh My Pi marketplace with three plugins, plus four agent skills for UI work.
 
 ![How a subagent gets its model and persona: Jev picks the model and effort, session-persona picks the persona, throughput shows the worker tree](docs/overview.png)
 
@@ -38,6 +38,22 @@ If `session-mode` is installed, uninstall it before installing `session-persona`
 
 `cycle/` is a README, not a plugin.
 It explains how to set `cycleOrder` and `modelRoles` in `~/.omp/agent/config.yml` so Ctrl+P walks flash → med → slow1 → slow2 → slow3.
+
+## Skills
+
+`skills/` holds plain agent skills (a `SKILL.md` plus references), usable by any agent that loads skill directories.
+They keep UI edits on the project's own component kit and tokens instead of ad hoc values.
+
+| Skill | Use it for |
+|---|---|
+| `ui-consistency` | Any UI edit in a project with a component kit or design tokens. Inventory the kit first, edit with it, then run `scripts/check-drift.mjs` on the diff. The other three skills defer to it. |
+| `css-craft` | Layout, overflow, scroll, viewport, form, focus, and mobile CSS bugs with known fixes. |
+| `motion` | Deciding whether to animate, building animation, and reviewing or auditing existing motion. |
+| `ui-stress` | Breaking a UI with realistic worst-case data, then fixing what breaks. |
+
+Install by symlinking or copying a skill directory into your agent's skills directory, for example `~/.omp/agent/skills/` or `~/.claude/skills/`.
+`check-drift.mjs` needs Node 18 or newer, or Bun, and no dependencies.
+Each skill's `NOTICE.md` credits the MIT-licensed work it adapts.
 
 ## Development
 
