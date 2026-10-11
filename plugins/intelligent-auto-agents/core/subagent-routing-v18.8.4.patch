@@ -27,7 +27,7 @@ index 76fb1cb950..28178e46c9 100644
  ## [18.8.4] - 2026-10-08
  
 diff --git a/packages/coding-agent/src/async/job-control.ts b/packages/coding-agent/src/async/job-control.ts
-index 5e29c9c399..454b6cd207 100644
+index 5e29c9c399..e0cce80c65 100644
 --- a/packages/coding-agent/src/async/job-control.ts
 +++ b/packages/coding-agent/src/async/job-control.ts
 @@ -6,7 +6,14 @@
@@ -46,7 +46,15 @@ index 5e29c9c399..454b6cd207 100644
  
  import { renderStructuredJson, structuredStatusLabel } from "../session/async-job-delivery";
  import { USER_INTERRUPT_LABEL } from "../session/messages";
-@@ -173,41 +180,25 @@ export function snapshotJobs(
+@@ -153,6 +160,7 @@ interface TrackedJobLike {
+ 	startTime: number;
+ 	endTime?: number;
+ 	latestDetails?: AsyncJobDetails;
++	agentId?: string;
+ 	resultText?: string;
+ 	errorText?: string;
+ 	structured?: StructuredSubagentOutput;
+@@ -173,41 +181,25 @@ export function snapshotJobs(
  		let resolvedModelIdentity: string | undefined;
  		let resolvedThinkingLevel: JobSnapshot["resolvedThinkingLevel"];
  		let advisor = false;
@@ -105,7 +113,7 @@ index 5e29c9c399..454b6cd207 100644
  		return {
  			id: latest.id,
  			type: latest.type,
-@@ -219,7 +210,7 @@ export function snapshotJobs(
+@@ -219,7 +211,7 @@ export function snapshotJobs(
  			...(resolvedModelIdentity ? { resolvedModelIdentity } : {}),
  			...(resolvedThinkingLevel !== undefined ? { resolvedThinkingLevel } : {}),
  			...(advisor ? { advisor: true } : {}),
@@ -115,29 +123,32 @@ index 5e29c9c399..454b6cd207 100644
  				? { resultText: latest.resultText }
  				: {}),
 diff --git a/packages/coding-agent/src/async/job-manager.ts b/packages/coding-agent/src/async/job-manager.ts
-index 5bd8f09ca5..8b283d9696 100644
+index 5bd8f09ca5..89019a52bf 100644
 --- a/packages/coding-agent/src/async/job-manager.ts
 +++ b/packages/coding-agent/src/async/job-manager.ts
-@@ -135,6 +135,36 @@ export interface AsyncJob {
+@@ -135,6 +135,39 @@ export interface AsyncJob {
  	retainedArtifactsCleanup?: () => Promise<void>;
  }
  
 +/**
 + * The subagent progress record a task job last reported: the `progress` entry
-+ * whose `id` matches the job, else the first entry. Undefined for non-task jobs
-+ * and for task jobs that have not reported progress yet.
++ * whose `id` names the job's subagent, else the first entry. Progress entries
++ * carry the subagent's `agentId`, which differs from the job id when
++ * `register()` suffixed a colliding id. Undefined for non-task jobs and for
++ * task jobs that have not reported progress yet.
 + */
 +export function taskJobProgressRecord(
-+	job: Pick<AsyncJob, "id" | "type" | "latestDetails">,
++	job: Pick<AsyncJob, "id" | "type" | "latestDetails" | "agentId">,
 +): Record<string, unknown> | undefined {
 +	if (job.type !== "task") return undefined;
 +	const progress = job.latestDetails?.progress;
 +	if (!Array.isArray(progress)) return undefined;
++	const ownId = job.agentId ?? job.id;
 +	let record: Record<string, unknown> | undefined;
 +	for (const item of progress) {
 +		if (!item || typeof item !== "object") continue;
 +		const candidate = item as Record<string, unknown>;
-+		if (candidate.id === job.id) return candidate;
++		if (candidate.id === ownId) return candidate;
 +		record ??= candidate;
 +	}
 +	return record;
@@ -145,7 +156,7 @@ index 5bd8f09ca5..8b283d9696 100644
 +
 +/** A running task job's latest completion self-estimate (0–100), if the subagent reported one. */
 +export function taskJobCompletionPercent(
-+	job: Pick<AsyncJob, "id" | "type" | "latestDetails"> & { status: string },
++	job: Pick<AsyncJob, "id" | "type" | "latestDetails" | "agentId"> & { status: string },
 +): number | undefined {
 +	if (job.status !== "running") return undefined;
 +	const value = taskJobProgressRecord(job)?.completionPercent;
@@ -421,7 +432,7 @@ index 62f3799d8d..b37e6f8477 100644
  
  /** One async job as a job inspector (the jobs sheet) shows it beyond its snapshot row. */
 diff --git a/packages/coding-agent/src/session/agent-session.ts b/packages/coding-agent/src/session/agent-session.ts
-index f8372ca118..75824c7176 100644
+index f8372ca118..38aaf3e7fb 100644
 --- a/packages/coding-agent/src/session/agent-session.ts
 +++ b/packages/coding-agent/src/session/agent-session.ts
 @@ -111,7 +111,12 @@ import { writeArchive } from "@oh-my-pi/pi-utils/ar";
@@ -438,14 +449,35 @@ index f8372ca118..75824c7176 100644
  import { reset as resetCapabilities } from "../capability";
  import type { EffectiveExtensionRoots } from "../capability/types";
  import type { SessionAccountPoolScope } from "../config/account-pools";
-@@ -2774,6 +2779,7 @@ export class AgentSession implements SettingsScope {
- 			command: job.process?.command,
- 			startTime: job.startTime,
- 			agentId: job.agentId,
-+			completionPercent: taskJobCompletionPercent(job),
- 		}));
+@@ -2766,15 +2771,19 @@ export class AgentSession implements SettingsScope {
+ 		const manager = this.#asyncJobManager;
+ 		if (!manager) return null;
+ 		const ownerFilter = this.#agentId ? { ownerId: this.#agentId } : undefined;
+-		const running = manager.getRunningJobs(ownerFilter).map(job => ({
+-			id: job.id,
+-			type: job.type,
+-			status: job.status,
+-			label: job.label,
+-			command: job.process?.command,
+-			startTime: job.startTime,
+-			agentId: job.agentId,
+-		}));
++		const running = manager.getRunningJobs(ownerFilter).map(job => {
++			const completionPercent = taskJobCompletionPercent(job);
++			return {
++				id: job.id,
++				type: job.type,
++				status: job.status,
++				label: job.label,
++				command: job.process?.command,
++				startTime: job.startTime,
++				agentId: job.agentId,
++				...(completionPercent !== undefined ? { completionPercent } : {}),
++			};
++		});
  		const recent = manager.getRecentJobs(options?.recentLimit ?? 5, ownerFilter).map(job => ({
  			id: job.id,
+ 			type: job.type,
 diff --git a/packages/coding-agent/src/session/turn-recovery.ts b/packages/coding-agent/src/session/turn-recovery.ts
 index 65243243fe..aa229776e7 100644
 --- a/packages/coding-agent/src/session/turn-recovery.ts
@@ -863,10 +895,10 @@ index 3d3d017488..d062e75a6d 100644
  							customTools: this.customTools,
  							outputSchema,
 diff --git a/packages/coding-agent/test/agent-session-async-delivery.test.ts b/packages/coding-agent/test/agent-session-async-delivery.test.ts
-index 9695dee084..bcf84efcdc 100644
+index 9695dee084..e249f10cc4 100644
 --- a/packages/coding-agent/test/agent-session-async-delivery.test.ts
 +++ b/packages/coding-agent/test/agent-session-async-delivery.test.ts
-@@ -171,6 +171,55 @@ describe("AgentSession owner-routed async delivery", () => {
+@@ -171,6 +171,61 @@ describe("AgentSession owner-routed async delivery", () => {
  		expect(recent.find(job => job.id === "proc-job")?.command).toBe(command);
  	});
  
@@ -894,26 +926,32 @@ index 9695dee084..bcf84efcdc 100644
 +
 +		const reported = Promise.withResolvers<void>();
 +		const gate = Promise.withResolvers<string>();
-+		manager.register(
++		// A live job already holds the subagent's id, so the task job's id is suffixed.
++		manager.register("bash", "occupies the id", async () => gate.promise, { id: "Worker", ownerId: "Owner" });
++		const taskJobId = manager.register(
 +			"task",
 +			"subagent work",
 +			async ({ reportProgress }) => {
-+				// A batch reports every member's progress; only this job's own entry counts.
++				// A batch reports every member's progress, keyed by subagent id; only this job's own entry counts.
 +				await reportProgress("working", {
 +					progress: [
-+						{ id: "sibling-job", completionPercent: 90 },
-+						{ id: "task-job", completionPercent: 40 },
++						{ id: "Sibling", completionPercent: 90 },
++						{ id: "Worker", completionPercent: 40 },
 +					],
 +				});
 +				reported.resolve();
 +				return gate.promise;
 +			},
-+			{ id: "task-job", ownerId: "Owner", agentId: "Worker" },
++			{ id: "Worker", ownerId: "Owner", agentId: "Worker" },
 +		);
 +		await reported.promise;
++		expect(taskJobId).toBe("Worker-2");
 +
 +		const running = session.getAsyncJobSnapshot()?.running ?? [];
-+		expect(running.find(job => job.id === "task-job")?.completionPercent).toBe(40);
++		expect(running.find(job => job.id === "Worker-2")?.completionPercent).toBe(40);
++		const bashJob = running.find(job => job.id === "Worker");
++		expect(bashJob).toBeDefined();
++		expect(Object.hasOwn(bashJob!, "completionPercent")).toBe(false);
 +
 +		gate.resolve("done");
 +		await session.settleAsyncWork();
