@@ -207,7 +207,7 @@ describe("catalog v9", () => {
 describe("effort resolution", () => {
 	test("maps difficulty per model with a `*` fallback", () => {
 		expect(modelDifficultyEffort(catalog, "anthropic/claude-sonnet-5-5", "critical")).toBe("low");
-		expect(modelDifficultyEffort(catalog, "xai-oauth/grok-4.7", "ordinary")).toBe("high");
+		expect(modelDifficultyEffort(catalog, "xai-oauth/grok-4.6", "ordinary")).toBe("high");
 		expect(modelDifficultyEffort(catalog, "no-such/model", "hard")).toBe("high");
 		expect(modelDifficultyEffort(catalog, "no-such/model", "ordinary")).toBe("medium");
 	});
@@ -218,14 +218,14 @@ describe("effort resolution", () => {
 		expect(clampEffort("high", undefined)).toBe("high");
 		expect(capEffort(catalog, "anthropic/claude-sonnet-5-5", "xhigh")).toBe("low");
 		expect(capEffort(catalog, "anthropic/claude-sonnet-5-5", "low")).toBe("low");
-		expect(capEffort(catalog, "xai-oauth/grok-4.7", "xhigh")).toBe("xhigh");
+		expect(capEffort(catalog, "xai-oauth/grok-4.6", "xhigh")).toBe("xhigh");
 		expect(capEffort(catalog, "no-such/model", "max")).toBe("max");
 		expect(fitEffort("xhigh", ["low", "high"])).toBe("high");
 		expect(fitEffort("medium", ["low", "high"])).toBe("low");
 		expect(fitEffort("high", ["low"])).toBe("low");
 		expect(fitEffort("medium", [])).toBeUndefined();
 		expect(effortForModel(catalog, "anthropic/claude-opus-5-5", "critical", ["high", "xhigh"])).toBe("xhigh");
-		expect(effortForModel(catalog, "xai-oauth/grok-4.7", "hard", ["low", "high"])).toBe("high");
+		expect(effortForModel(catalog, "xai-oauth/grok-4.6", "hard", ["low", "high"])).toBe("high");
 	});
 
 	test("caps a pinned effort at the model's catalog maxEffort", () => {
@@ -273,7 +273,7 @@ describe("plan provenance", () => {
 		"---",
 		"plan:",
 		"  authored-by:",
-		"    - model: xai-oauth/grok-4.7",
+		"    - model: xai-oauth/grok-4.6",
 		"    - model: @frontier-2",
 		"  reviews:",
 		"    - model: anthropic/claude-opus-5-5",
@@ -284,7 +284,7 @@ describe("plan provenance", () => {
 
 	test("reads authored-by and reviews from plan front matter", () => {
 		expect(planProvenance(plan, catalog.planMetadata)).toEqual({
-			authors: ["xai-oauth/grok-4.7", "@frontier-2"],
+			authors: ["xai-oauth/grok-4.6", "@frontier-2"],
 			reviews: ["anthropic/claude-opus-5-5"],
 		});
 	});
@@ -296,14 +296,14 @@ describe("plan provenance", () => {
 });
 
 describe("plan-review author exclusion", () => {
-	const members = [member("openai-codex", "gpt-6.1-sol"), member("anthropic", "claude-opus-5-5"), member("xai-oauth", "grok-4.7")];
+	const members = [member("openai-codex", "gpt-6.1-sol"), member("anthropic", "claude-opus-5-5"), member("xai-oauth", "grok-4.6")];
 
 	test("drops authors and prefers models that have not reviewed", () => {
 		const order = preferPlanReviewMembers(members, {
-			authors: ["xai-oauth/grok-4.7"],
+			authors: ["xai-oauth/grok-4.6"],
 			reviews: ["anthropic/claude-opus-5-5"],
 		});
-		expect(order.excluded).toEqual(["xai-oauth/grok-4.7"]);
+		expect(order.excluded).toEqual(["xai-oauth/grok-4.6"]);
 		expect(order.members.map(m => `${m.model.provider}/${m.model.id}`)).toEqual([
 			"openai-codex/gpt-6.1-sol",
 			"anthropic/claude-opus-5-5",
@@ -313,7 +313,7 @@ describe("plan-review author exclusion", () => {
 
 	test("reuses the first non-author when every non-author has reviewed", () => {
 		const order = preferPlanReviewMembers(members, {
-			authors: ["xai-oauth/grok-4.7"],
+			authors: ["xai-oauth/grok-4.6"],
 			reviews: ["openai-codex/gpt-6.1-sol", "anthropic/claude-opus-5-5"],
 		});
 		expect(order.members.map(m => `${m.model.provider}/${m.model.id}`)).toEqual([
@@ -341,24 +341,24 @@ describe("plan-review author exclusion", () => {
 
 describe("pool ranking", () => {
 	const members = [
-		member("xai-oauth", "grok-4.7", { penaltyKind: "weekly", minWeeklyHeadroom: 0.05, minMonthlyHeadroom: 0 }),
+		member("xai-oauth", "grok-4.6", { penaltyKind: "weekly", minWeeklyHeadroom: 0.05, minMonthlyHeadroom: 0 }),
 		member("anthropic", "claude-sonnet-5-5", { maxShortUsed: 0.7, minWeeklyHeadroom: 0.1 }),
 	];
 
 	test("orders eligible members and skips a member over the skip threshold", () => {
 		const ranked = rankPool(members, { reports: [report("xai-oauth", 0.1), report("anthropic", 0.1)], credentialCounts: {} }, new Map(), [], catalog.poolLimits, Date.now());
-		expect(ranked.order).toEqual(["xai-oauth/grok-4.7", "anthropic/claude-sonnet-5-5"]);
+		expect(ranked.order).toEqual(["xai-oauth/grok-4.6", "anthropic/claude-sonnet-5-5"]);
 
 		const crowded = rankPool(members, { reports: [report("xai-oauth", 0.99), report("anthropic", 0.1)], credentialCounts: {} }, new Map(), [], catalog.poolLimits, Date.now());
-		expect(crowded.skipped).toContain("xai-oauth/grok-4.7");
-		expect(crowded.order).not.toContain("xai-oauth/grok-4.7");
+		expect(crowded.skipped).toContain("xai-oauth/grok-4.6");
+		expect(crowded.order).not.toContain("xai-oauth/grok-4.6");
 		expect(crowded.order).toContain("anthropic/claude-sonnet-5-5");
 	});
 
 	test("treats a stale report as no usage", () => {
 		const stale = report("xai-oauth", 0.1, Date.now() - catalog.poolLimits.maxReportAgeMs - 60_000);
 		const ranked = rankPool(members, { reports: [stale], credentialCounts: {} }, new Map(), [], catalog.poolLimits, Date.now());
-		expect(ranked.verdicts["xai-oauth/grok-4.7"]?.status).toBe("stale");
+		expect(ranked.verdicts["xai-oauth/grok-4.6"]?.status).toBe("stale");
 	});
 
 	test("maps provider limits into the three pacing windows", () => {

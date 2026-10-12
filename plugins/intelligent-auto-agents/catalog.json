@@ -74,7 +74,7 @@
 			"hard": "high",
 			"critical": "xhigh"
 		},
-		"xai-oauth/grok-4.7": {
+		"xai-oauth/grok-4.6": {
 			"supports": [
 				"minimal",
 				"low",

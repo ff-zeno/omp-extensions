@@ -88,7 +88,7 @@ const model = (id: string, efforts: string[], provider = "routing-test"): Routin
 });
 const CHAT_MODEL = model("chat", ["low", "high", "xhigh"]);
 const OPUS = model("claude-opus-5-5", ["low", "medium", "high", "xhigh", "max"], "anthropic");
-const GROK = model("grok-4.7", ["low", "medium", "high", "xhigh"], "xai-oauth");
+const GROK = model("grok-4.6", ["low", "medium", "high", "xhigh"], "xai-oauth");
 const SOL = model("gpt-6.1-sol", ["low", "medium", "high", "xhigh", "max"], "openai-codex");
 const LUNA = model("gpt-5.6-luna", ["low", "medium", "high", "xhigh", "max"], "openai-codex");
 const HAIKU = model("claude-haiku-5-5", ["low", "medium", "high", "xhigh", "max"], "anthropic");
@@ -103,7 +103,7 @@ const DEFAULT_BINDINGS: Record<string, RoutingTestModel> = {
 	"@orchestrator": GEMINI,
 	"anthropic/claude-opus-5-5": OPUS,
 	"anthropic/claude-sonnet-5-5": model("claude-sonnet-5-5", ["low", "medium", "high", "xhigh", "max"], "anthropic"),
-	"xai-oauth/grok-4.7": GROK,
+	"xai-oauth/grok-4.6": GROK,
 	"openai-codex/gpt-6.1-sol": SOL,
 	"openai-codex/gpt-5.6-luna": LUNA,
 };
@@ -269,7 +269,7 @@ describe("persona suggestions", () => {
 		routeChoice = "code";
 		difficultyScore = 0;
 		personaChoice = "brute";
-		const fixture = createFixture({ agent: main, usageReports: [usageReport("xai-oauth", "grok-4.7")] });
+		const fixture = createFixture({ agent: main, usageReports: [usageReport("xai-oauth", "grok-4.6")] });
 		const result = await spawn(fixture, { spawnKey: "Renamer" });
 		expect(judgeCalls).toBe(1);
 		expect(personaRegistry()?.get("main:Renamer")?.persona).toBe("brute");
@@ -283,7 +283,7 @@ describe("persona suggestions", () => {
 		routeChoice = "code";
 		difficultyScore = 2;
 		personaChoice = "brute";
-		const fixture = createFixture({ agent: main, usageReports: [usageReport("xai-oauth", "grok-4.7")] });
+		const fixture = createFixture({ agent: main, usageReports: [usageReport("xai-oauth", "grok-4.6")] });
 		const result = await spawn(fixture, { spawnKey: "Migrator" });
 		expect(personaRegistry()?.get("main:Migrator")?.persona).toBe("normal");
 		expect(result.note).not.toContain("persona");
@@ -294,7 +294,7 @@ describe("persona suggestions", () => {
 		reset();
 		routeChoice = "code";
 		personaChoice = "brute";
-		const fixture = createFixture({ agent: main, usageReports: [usageReport("xai-oauth", "grok-4.7")] });
+		const fixture = createFixture({ agent: main, usageReports: [usageReport("xai-oauth", "grok-4.6")] });
 		await spawn(fixture, { agent: "scout", spawnKey: "Looker" });
 		await spawn(fixture);
 		expect(judgeRequests.every(request => request.questions.persona === undefined)).toBe(true);
@@ -311,7 +311,7 @@ describe("intelligent auto-agents runtime", () => {
 		const result = await spawn(fixture);
 
 		expect(result).toMatchObject({ thinkingLevel: "low" });
-		expect(result.model).toEqual(["anthropic/claude-sonnet-5-5", "xai-oauth/grok-4.7:high", "openai-codex/gpt-5.6-luna:max"]);
+		expect(result.model).toEqual(["anthropic/claude-sonnet-5-5", "xai-oauth/grok-4.6:high", "openai-codex/gpt-5.6-luna:max"]);
 		const data = decisionData(fixture);
 		expect(data).toMatchObject({ slot: "code", difficulty: "ordinary" });
 		expect(data.pool).toMatchObject({ active: "anthropic/claude-sonnet-5-5" });
@@ -327,7 +327,7 @@ describe("intelligent auto-agents runtime", () => {
 		const anthropicOut = await spawn(
 			createFixture({ usageReports: [usage("anthropic", 0.99), usage("xai-oauth"), usage("openai-codex")] }),
 		);
-		expect(anthropicOut).toMatchObject({ model: ["xai-oauth/grok-4.7", "openai-codex/gpt-5.6-luna:max"], thinkingLevel: "low" });
+		expect(anthropicOut).toMatchObject({ model: ["xai-oauth/grok-4.6", "openai-codex/gpt-5.6-luna:max"], thinkingLevel: "low" });
 
 		reset();
 		difficultyScore = 0;
@@ -359,7 +359,7 @@ describe("intelligent auto-agents runtime", () => {
 		routeChoice = "lead";
 		const fixture = createFixture({ usageReports: ON_PACE });
 		const result = await spawn(fixture, { agent: "git" });
-		expect(result).toMatchObject({ model: ["anthropic/claude-haiku-5-5", "xai-oauth/grok-4.7:low", "openai-codex/gpt-5.6-luna:xhigh"], thinkingLevel: "xhigh" });
+		expect(result).toMatchObject({ model: ["anthropic/claude-haiku-5-5", "xai-oauth/grok-4.6:low", "openai-codex/gpt-5.6-luna:xhigh"], thinkingLevel: "xhigh" });
 		expect(decisionData(fixture)).toMatchObject({ slot: "commit", difficulty: "exact" });
 		expect(judgeRequests[0].questions.route).toBeUndefined();
 
@@ -386,8 +386,8 @@ describe("intelligent auto-agents runtime", () => {
 	test("a Directive naming a literal provider/model is honoured", async () => {
 		reset();
 		const fixture = createFixture();
-		const result = await spawn(fixture, { assignment: "Directive: use xai-oauth/grok-4.7 low" });
-		expect(result).toMatchObject({ model: ["xai-oauth/grok-4.7"], thinkingLevel: "low" });
+		const result = await spawn(fixture, { assignment: "Directive: use xai-oauth/grok-4.6 low" });
+		expect(result).toMatchObject({ model: ["xai-oauth/grok-4.6"], thinkingLevel: "low" });
 		expect(judgeCalls).toBe(0);
 	});
 
@@ -454,13 +454,13 @@ describe("intelligent auto-agents runtime", () => {
 		try {
 			writeFileSync(
 				join(dir, "plan.md"),
-				["---", "plan:", "  authored-by:", "    - model: xai-oauth/grok-4.7", "  reviews: []", "---", "# Plan"].join("\n"),
+				["---", "plan:", "  authored-by:", "    - model: xai-oauth/grok-4.6", "  reviews: []", "---", "# Plan"].join("\n"),
 			);
 			const fixture = createFixture({ cwd: dir });
 			const result = await spawn(fixture, { agent: "reviewer", assignment: "Review the plan at plan.md" });
 
 			expect(result.model[0]).toBe("openai-codex/gpt-6.1-sol");
-			expect(result.model).not.toContain("xai-oauth/grok-4.7");
+			expect(result.model).not.toContain("xai-oauth/grok-4.6");
 			expect(result.note ?? "").toContain("plan authors excluded");
 		} finally {
 			rmSync(dir, { recursive: true, force: true });
@@ -482,7 +482,7 @@ describe("intelligent auto-agents runtime", () => {
 			const fixture = createFixture({ artifactsDir: dir });
 			const result = await spawn(fixture, { agent: "reviewer", assignment: "Review local://plan.md" });
 			// Sol authored and Opus already reviewed, so Grok is preferred.
-			expect(result.model[0]).toBe("xai-oauth/grok-4.7");
+			expect(result.model[0]).toBe("xai-oauth/grok-4.6");
 		} finally {
 			rmSync(dir, { recursive: true, force: true });
 		}
@@ -569,7 +569,7 @@ describe("intelligent auto-agents runtime", () => {
 			suppressedSelectors: ["anthropic/claude-haiku-5-5:xhigh"],
 		});
 		const result = await spawn(fixture);
-		expect(result.model[0]).toBe("xai-oauth/grok-4.7");
+		expect(result.model[0]).toBe("xai-oauth/grok-4.6");
 		expect(decisionData(fixture).rollover).toMatchObject({ from: "anthropic/claude-haiku-5-5" });
 	});
 
@@ -585,17 +585,17 @@ describe("intelligent auto-agents runtime", () => {
 	test("keeps the routed member when a pool member is over quota", async () => {
 		reset();
 		routeChoice = "code";
-		const fixture = createFixture({ usageReports: [usageReport("xai-oauth", "grok-4.7", Date.now(), 0.99), usageReport("anthropic", "claude-opus-5-5")] });
+		const fixture = createFixture({ usageReports: [usageReport("xai-oauth", "grok-4.6", Date.now(), 0.99), usageReport("anthropic", "claude-opus-5-5")] });
 		const result = await spawn(fixture);
-		expect(result.model[0]).not.toBe("xai-oauth/grok-4.7");
-		expect(decisionData(fixture).pool).toMatchObject({ skipped: expect.arrayContaining(["xai-oauth/grok-4.7"]) });
+		expect(result.model[0]).not.toBe("xai-oauth/grok-4.6");
+		expect(decisionData(fixture).pool).toMatchObject({ skipped: expect.arrayContaining(["xai-oauth/grok-4.6"]) });
 	});
 
 	test("records a child failure as a rollover and leaves an abort unchanged", async () => {
 		reset();
 		routeChoice = "code";
 		const run = async (sessionId: string, provider: string, modelId: string, stopReason: string) => {
-			const parent = createFixture({ usageReports: [usageReport("xai-oauth", "grok-4.7")] });
+			const parent = createFixture({ usageReports: [usageReport("xai-oauth", "grok-4.6")] });
 			await spawn(parent);
 			const child = createFixture({
 				agent: { kind: "sub", name: "task", depth: 1 },
@@ -611,7 +611,7 @@ describe("intelligent auto-agents runtime", () => {
 		const rollover = await run("rollover", "other", "other", "stop");
 		expect(rollover.entries.at(-1)?.data).toMatchObject({ outcome: "failure", reason: "rollover", failureStreak: 1 });
 
-		const aborted = await run("aborted", "xai-oauth", "grok-4.7", "aborted");
+		const aborted = await run("aborted", "xai-oauth", "grok-4.6", "aborted");
 		expect(aborted.entries.at(-1)?.data).toMatchObject({ outcome: "unchanged", reason: "aborted" });
 	});
 
@@ -620,7 +620,7 @@ describe("intelligent auto-agents runtime", () => {
 	test("the /auto-agents command reports status without changing the chat model", async () => {
 		reset();
 		routeChoice = "code";
-		const fixture = createFixture({ usageReports: [usageReport("xai-oauth", "grok-4.7")] });
+		const fixture = createFixture({ usageReports: [usageReport("xai-oauth", "grok-4.6")] });
 		await spawn(fixture);
 		const commands = new Map<string, { handler: (args: string, ctx: unknown) => Promise<void> }>();
 		const mockPi = {
