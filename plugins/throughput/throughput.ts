@@ -524,7 +524,10 @@ export function applyAssistantProgress(
 	session.messageChars += deltaChars;
 	const effectiveChars = Math.max(session.messageChars, contentChars);
 	session.messageChars = effectiveChars;
-	session.messageTokens = resolveMessageTokens(message, effectiveChars);
+	// A streaming partial's usage.output is not a running count: Anthropic sets it once from
+	// `message_start` (a handful of tokens) and only updates it at `message_delta`, so trusting
+	// it would pin a long reply's live rate to those few tokens. Billed usage wins at message_end.
+	session.messageTokens = Math.max(outputTokens(message) ?? 0, estimateTokens(effectiveChars));
 	session.lastTokenAt = timestamp;
 	session.lastActivityAt = timestamp;
 	session.updatedAt = timestamp;
@@ -1173,6 +1176,9 @@ export default function throughput(pi: ExtensionAPI): void {
 
 	pi.on("before_provider_request", (_event, ctx) => {
 		const current = ensureState(ctx);
+		// Side requests share this hook (a worker's `<progress-check>` completion probe, the main
+		// agent's `<title-request>`); one landing mid-message would restart the open stream's clock.
+		if (current.messageOpen) return;
 		const timestamp = Date.now();
 		current.requestStartedAt = timestamp;
 		current.firstTokenAt = 0;
@@ -1208,8 +1214,9 @@ export default function throughput(pi: ExtensionAPI): void {
 		const current = ensureState(ctx);
 		if (!current.messageOpen) return;
 		const timestamp = Date.now();
-		const finalTokens = resolveMessageTokens(event.message, current.messageChars);
-		current.messageTokens = Math.max(current.messageTokens, finalTokens);
+		const billedTokens = outputTokens(event.message);
+		current.messageTokens =
+			billedTokens ?? Math.max(current.messageTokens, resolveMessageTokens(event.message, current.messageChars));
 		current.totalTokens += current.messageTokens;
 		current.lastTokenAt = timestamp;
 		if (current.firstTokenAt === 0 && current.messageTokens > 0) {

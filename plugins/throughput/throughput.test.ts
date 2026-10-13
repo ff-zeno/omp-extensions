@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, setSystemTime, test } from "bun:test";
 import type { ExtensionContext } from "@oh-my-pi/pi-coding-agent";
 import {
 	applyAssistantProgress,
@@ -164,6 +164,75 @@ describe("Throughput token accounting and TPS calculation", () => {
 		);
 		expect(tokens).toBe(800);
 		expect(callTps(tokens, 3_500)).toBeCloseTo(228.57, 1);
+	});
+
+	test("tracks a worker's live rate mid-message despite stale partial usage and side provider requests", () => {
+		// Anthropic partials carry message_start's usage.output (6) on every update until message_delta.
+		const global = globalThis as Record<symbol, unknown>;
+		const registryKey = Symbol.for("omp.throughput.registry.v4");
+		const previousRegistry = global[registryKey];
+		delete global[registryKey];
+		const handlers = new Map<string, (event: unknown, ctx: unknown) => void>();
+		throughput({
+			on: (event: string, handler: unknown) => {
+				handlers.set(event, handler as (event: unknown, ctx: unknown) => void);
+			},
+			getThinkingLevel: () => "low",
+		} as unknown as Parameters<typeof throughput>[0]);
+		const workerContext = {
+			agent: { kind: "sub", id: "partial-usage-worker", name: "task", depth: 1, parentId: "partial-usage-main" },
+			sessionManager: {
+				getSessionId: () => "partial-usage-worker",
+				getSessionName: () => "worker",
+				getSessionFile: () => "/sessions/partial-usage-worker.jsonl",
+			},
+			model: { id: "anthropic/claude" },
+		};
+		const partial = (chars: number, output: number) => ({
+			role: "assistant",
+			usage: { output },
+			content: [{ type: "toolCall", name: "yield", arguments: { result: "x".repeat(chars) } }],
+		});
+		const liveTps = (session: SessionThroughput, now: number) => {
+			const windowMs = generationWindowMs(session, now);
+			return callTps(effectiveStreamTokens(session, windowMs, now), windowMs);
+		};
+		try {
+			setSystemTime(new Date(1_000));
+			handlers.get("message_start")?.({ message: partial(0, 6) }, workerContext);
+			handlers.get("message_update")?.(
+				{ message: partial(0, 6), assistantMessageEvent: { type: "toolcall_start" } },
+				workerContext,
+			);
+			const delta = "y".repeat(25);
+			for (let i = 1; i <= 150; i++) {
+				setSystemTime(new Date(1_000 + i * 70));
+				// A side request on the same session while the reply streams (OMP's `<progress-check>` probe).
+				if (i === 90) handlers.get("before_provider_request")?.({ payload: {} }, workerContext);
+				handlers.get("message_update")?.(
+					{ message: partial(i * 25, 6), assistantMessageEvent: { type: "toolcall_delta", delta } },
+					workerContext,
+				);
+				if (i === 100) {
+					const session = (global[registryKey] as ThroughputRegistry).sessions.get("partial-usage-worker");
+					if (!session) throw new Error("worker session missing");
+					// 2,500 chars (~715 tokens) over 7s: ~100 tok/s, not 6 tokens decaying toward 0.
+					expect(liveTps(session, 1_000 + i * 70)).toBeGreaterThan(80);
+					expect(liveTps(session, 1_000 + i * 70)).toBeLessThan(120);
+				}
+			}
+			// The final billed count replaces the stream estimate (3,750 chars ~ 1,072 tokens).
+			handlers.get("message_end")?.({ message: partial(3_750, 1_000) }, workerContext);
+			const session = (global[registryKey] as ThroughputRegistry).sessions.get("partial-usage-worker");
+			expect(session?.messageTokens).toBe(1_000);
+			expect(session?.totalTokens).toBe(1_000);
+			// 1,000 billed tokens over the 10.5s stream.
+			expect(session?.avgTps).toBeCloseTo(95.24, 1);
+		} finally {
+			setSystemTime();
+			if (previousRegistry === undefined) delete global[registryKey];
+			else global[registryKey] = previousRegistry;
+		}
 	});
 });
 
