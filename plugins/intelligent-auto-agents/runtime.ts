@@ -1,6 +1,6 @@
 // Routing runtime; loaded by index.ts only on OMP with subagent routing API v2.
 // Routing policy belongs here; OMP core owns dispatch and effort transport.
-import { TypeSafeJudge, scopeAntigravityLimitsForModel, type UsageReport } from "@oh-my-pi/pi-ai";
+import { NativeJudge, scopeAntigravityLimitsForModel, type UsageReport } from "@oh-my-pi/pi-ai";
 import * as PiAi from "@oh-my-pi/pi-ai";
 import { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import { type ExtensionAPI, type ExtensionContext, getSupportedEfforts } from "@oh-my-pi/pi-coding-agent";
@@ -570,7 +570,7 @@ export function register(pi: ExtensionAPI): void {
 				(await ctx.modelRegistry.getApiKeyForProvider("typesafe", undefined, { signal })) ??
 				process.env.TYPESAFE_API_KEY;
 			if (!apiKey) throw new RoutingAuthenticationError();
-			return new TypeSafeJudge({ apiKey, model: catalog.jevModel, timeoutMs: catalog.timeoutMs }).judge(request, {
+			return new NativeJudge({ apiKey, model: catalog.jevModel, timeoutMs: catalog.timeoutMs }).judge(request, {
 				signal,
 			});
 		};

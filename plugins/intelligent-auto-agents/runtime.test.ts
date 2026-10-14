@@ -58,7 +58,7 @@ mock.module("@oh-my-pi/pi-ai", () => ({
 	resolveUsedFraction: (limit: { amount: { usedFraction?: number; unit: string } }) => limit.amount.usedFraction,
 	scopeAntigravityLimitsForModel: (report: { limits: unknown[] }) => report.limits,
 	getAntigravityCounterKeyForModel: (modelId: string | undefined) => modelId,
-	TypeSafeJudge: class {
+	NativeJudge: class {
 		judge = async (request: JudgeRequest) => judgeBridge.__intelligentAutoAgentsJudge?.(request) ?? { answers: {} };
 	},
 }));
@@ -346,11 +346,11 @@ describe("intelligent auto-agents runtime", () => {
 		reset();
 		difficultyScore = 2;
 		routeChoice = "code";
-		// Every provider exhausted: the pool fallback is Opus low.
+		// Every provider exhausted: the code pool fallback is Sol low, ungated.
 		const allOut = await spawn(
 			createFixture({ usageReports: [usage("anthropic", 0.99), usage("xai-oauth", 0.99), usage("openai-codex", 0.99)] }),
 		);
-		expect(allOut).toMatchObject({ model: ["anthropic/claude-opus-5-5"], thinkingLevel: "low" });
+		expect(allOut).toMatchObject({ model: ["openai-codex/gpt-6.1-sol"], thinkingLevel: "low" });
 	});
 
 	test("a git spawn routes through the commit pool without a task-type question", async () => {

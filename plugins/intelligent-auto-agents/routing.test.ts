@@ -6,7 +6,7 @@ mock.module("@oh-my-pi/pi-ai", () => ({
 	resolveUsedFraction: (limit: { amount: { usedFraction?: number; unit: string } }) => limit.amount.usedFraction,
 	scopeAntigravityLimitsForModel: (report: { limits: unknown[] }) => report.limits,
 	getAntigravityCounterKeyForModel: (modelId: string | undefined) => modelId,
-	TypeSafeJudge: class {
+	NativeJudge: class {
 		judge = async () => ({ answers: {} });
 	},
 }));

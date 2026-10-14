@@ -193,8 +193,7 @@
 						"exact",
 						"ordinary"
 					],
-					"maxShortUsed": 0.7,
-					"minWeeklyHeadroom": 0.1
+					"minWeeklyHeadroom": 0
 				},
 				{
 					"model": "anthropic/claude-sonnet-5-5",
@@ -220,8 +219,7 @@
 					"difficulties": [
 						"hard"
 					],
-					"maxShortUsed": 0.7,
-					"minWeeklyHeadroom": 0.1
+					"minWeeklyHeadroom": 0
 				},
 				{
 					"model": "@frontier-1",
@@ -247,12 +245,11 @@
 					"difficulties": [
 						"critical"
 					],
-					"maxShortUsed": 0.7,
-					"minWeeklyHeadroom": 0.1
+					"minWeeklyHeadroom": 0
 				}
 			],
 			"fallback": {
-				"model": "@frontier-1",
+				"model": "openai-codex/gpt-6.1-sol",
 				"effort": "low"
 			}
 		},
@@ -285,8 +282,7 @@
 						"exact",
 						"ordinary"
 					],
-					"maxShortUsed": 0.7,
-					"minWeeklyHeadroom": 0.1
+					"minWeeklyHeadroom": 0
 				},
 				{
 					"model": "@frontier-1",
@@ -312,8 +308,7 @@
 					"difficulties": [
 						"hard"
 					],
-					"maxShortUsed": 0.7,
-					"minWeeklyHeadroom": 0.1
+					"minWeeklyHeadroom": 0
 				},
 				{
 					"model": "@frontier-1",
@@ -339,12 +334,11 @@
 					"difficulties": [
 						"critical"
 					],
-					"maxShortUsed": 0.7,
-					"minWeeklyHeadroom": 0.1
+					"minWeeklyHeadroom": 0
 				}
 			],
 			"fallback": {
-				"model": "@frontier-1",
+				"model": "openai-codex/gpt-6.1-sol",
 				"effort": "low"
 			}
 		},
@@ -374,8 +368,7 @@
 					"difficulties": [
 						"exact"
 					],
-					"maxShortUsed": 0.7,
-					"minWeeklyHeadroom": 0.1
+					"minWeeklyHeadroom": 0
 				},
 				{
 					"model": "anthropic/claude-sonnet-5-5",
@@ -401,8 +394,7 @@
 					"difficulties": [
 						"ordinary"
 					],
-					"maxShortUsed": 0.7,
-					"minWeeklyHeadroom": 0.1
+					"minWeeklyHeadroom": 0
 				},
 				{
 					"model": "@frontier-1",
@@ -428,8 +420,7 @@
 					"difficulties": [
 						"hard"
 					],
-					"maxShortUsed": 0.7,
-					"minWeeklyHeadroom": 0.1
+					"minWeeklyHeadroom": 0
 				},
 				{
 					"model": "@frontier-1",
@@ -455,12 +446,11 @@
 					"difficulties": [
 						"critical"
 					],
-					"maxShortUsed": 0.7,
-					"minWeeklyHeadroom": 0.1
+					"minWeeklyHeadroom": 0
 				}
 			],
 			"fallback": {
-				"model": "@frontier-1",
+				"model": "openai-codex/gpt-6.1-sol",
 				"effort": "low"
 			}
 		},
@@ -490,8 +480,7 @@
 					"difficulties": [
 						"exact"
 					],
-					"maxShortUsed": 0.7,
-					"minWeeklyHeadroom": 0.1
+					"minWeeklyHeadroom": 0
 				},
 				{
 					"model": "anthropic/claude-sonnet-5-5",
@@ -517,8 +506,7 @@
 					"difficulties": [
 						"ordinary"
 					],
-					"maxShortUsed": 0.7,
-					"minWeeklyHeadroom": 0.1
+					"minWeeklyHeadroom": 0
 				},
 				{
 					"model": "@frontier-1",
@@ -544,8 +532,7 @@
 					"difficulties": [
 						"hard"
 					],
-					"maxShortUsed": 0.7,
-					"minWeeklyHeadroom": 0.1
+					"minWeeklyHeadroom": 0
 				},
 				{
 					"model": "@frontier-1",
@@ -571,12 +558,11 @@
 					"difficulties": [
 						"critical"
 					],
-					"maxShortUsed": 0.7,
-					"minWeeklyHeadroom": 0.1
+					"minWeeklyHeadroom": 0
 				}
 			],
 			"fallback": {
-				"model": "@frontier-1",
+				"model": "openai-codex/gpt-6.1-sol",
 				"effort": "low"
 			}
 		},

@@ -95,7 +95,7 @@ Pinned agents keep their bound `modelRoles`; Jev sets only effort from the model
 Jev rates difficulty as Exact, Ordinary, Hard, or Critical according to the catalog ladder.
 A pool member scoped with `difficulties` serves only those levels.
 Each worker pool lists one member per provider per difficulty, tried Anthropic, then xAI, then OpenAI, because Haiku, Sonnet, and Opus share one Anthropic quota, so rolling over inside a provider buys nothing.
-Every worker pool's fallback is `@frontier-1` (Opus) low, used only when every member is quota-skipped.
+Every worker pool's fallback is `openai-codex/gpt-6.1-sol` low, used only when every member is quota-skipped.
 
 | Pool | Difficulty | Anthropic | xAI (Grok) | OpenAI |
 |---|---|---|---|---|
@@ -117,7 +117,7 @@ Every worker pool's fallback is `@frontier-1` (Opus) low, used only when every m
 | `review` | critical | Opus high | Grok xhigh | Sol xhigh |
 
 Sonnet is named literally with no role and never runs above low.
-The OpenAI tier is `openai-codex/gpt-5.6-luna` (mechanical and commit) and `openai-codex/gpt-6.1-sol` (code and review); both gate at `maxShortUsed` 0.7 and `minWeeklyHeadroom` 0.1.
+The OpenAI tier is `openai-codex/gpt-5.6-luna` (mechanical and commit) and `openai-codex/gpt-6.1-sol` (code and review); they gate only at `minWeeklyHeadroom` 0 (no faster than weekly pace), because the Codex usage report carries only a 7-day window and a `maxShortUsed` gate would make them permanently ineligible.
 `openai-codex/gpt-6.1-sol` is review-only as a role alias (the `@frontier-2`, `@slow2`, `@advisor`, and `@manager` aliases stay review-only), while the literal id serves the `code` and `review` pools.
 `openai-codex/gpt-5.6-luna` is blocked as a `Directive:` target but serves the `mechanical` and `commit` pools; the `web` role also names it literally.
 A planning request first passes the catalog readiness check.
