@@ -34,8 +34,8 @@
 	},
 	"difficulty": {
 		"exact": "Fully specified work with named targets, no hidden edge cases, and nothing left to decide.",
-		"ordinary": "A settled spec or a bounded change in one area. Routine care is enough.",
-		"hard": "Ambiguous behavior, several interacting parts, or a review where missed cases are likely without extra care.",
+		"ordinary": "The default for routine work: a bounded change, fix, investigation, or review that a competent engineer could carry out without stopping to design, even when it spans a few files. Implementing a settled spec or fixing a bug with a known cause is ordinary.",
+		"hard": "Needs design judgment: an unknown root cause, behavior that has to be chosen, or several interacting components where a mistake is likely and costly to find later. A long brief or a large diff alone does not make work hard.",
 		"critical": "A new system, a major redesign, security or data-loss risk, or a framing that would be expensive to undo."
 	},
 	"nuances": [
@@ -153,6 +153,7 @@
 		"skipAt": 0.95,
 		"burstPenalty": 0.01,
 		"finalWindowMs": 18000000,
+		"weeklyCrowdLiftMs": 43200000,
 		"usageTimeoutMs": 5000,
 		"maxReportAgeMs": 900000,
 		"clockSkewMs": 60000,
@@ -160,6 +161,7 @@
 		"demoteForMs": 1800000,
 		"burstPenaltyWindow": {
 			"xai-oauth": "weekly",
+			"openai-codex": "weekly",
 			"*": "short"
 		}
 	},
@@ -183,8 +185,7 @@
 						"exact",
 						"ordinary"
 					],
-					"minWeeklyHeadroom": 0.05,
-					"minMonthlyHeadroom": 0
+					"minWeeklyHeadroom": 0
 				},
 				{
 					"model": "openai-codex/gpt-5.6-luna",
@@ -210,8 +211,7 @@
 					"difficulties": [
 						"hard"
 					],
-					"minWeeklyHeadroom": 0.05,
-					"minMonthlyHeadroom": 0
+					"minWeeklyHeadroom": 0
 				},
 				{
 					"model": "openai-codex/gpt-5.6-luna",
@@ -236,8 +236,7 @@
 					"difficulties": [
 						"critical"
 					],
-					"minWeeklyHeadroom": 0.05,
-					"minMonthlyHeadroom": 0
+					"minWeeklyHeadroom": 0
 				},
 				{
 					"model": "openai-codex/gpt-5.6-luna",
@@ -272,8 +271,7 @@
 						"exact",
 						"ordinary"
 					],
-					"minWeeklyHeadroom": 0.05,
-					"minMonthlyHeadroom": 0
+					"minWeeklyHeadroom": 0
 				},
 				{
 					"model": "openai-codex/gpt-5.6-luna",
@@ -299,8 +297,7 @@
 					"difficulties": [
 						"hard"
 					],
-					"minWeeklyHeadroom": 0.05,
-					"minMonthlyHeadroom": 0
+					"minWeeklyHeadroom": 0
 				},
 				{
 					"model": "openai-codex/gpt-5.6-luna",
@@ -325,8 +322,7 @@
 					"difficulties": [
 						"critical"
 					],
-					"minWeeklyHeadroom": 0.05,
-					"minMonthlyHeadroom": 0
+					"minWeeklyHeadroom": 0
 				},
 				{
 					"model": "openai-codex/gpt-5.6-luna",
@@ -359,8 +355,7 @@
 					"difficulties": [
 						"exact"
 					],
-					"minWeeklyHeadroom": 0.05,
-					"minMonthlyHeadroom": 0
+					"minWeeklyHeadroom": 0
 				},
 				{
 					"model": "openai-codex/gpt-5.6-luna",
@@ -385,8 +380,7 @@
 					"difficulties": [
 						"ordinary"
 					],
-					"minWeeklyHeadroom": 0.05,
-					"minMonthlyHeadroom": 0
+					"minWeeklyHeadroom": 0
 				},
 				{
 					"model": "openai-codex/gpt-5.6-luna",
@@ -411,8 +405,7 @@
 					"difficulties": [
 						"hard"
 					],
-					"minWeeklyHeadroom": 0.05,
-					"minMonthlyHeadroom": 0
+					"minWeeklyHeadroom": 0
 				},
 				{
 					"model": "openai-codex/gpt-6.1-sol",
@@ -437,8 +430,7 @@
 					"difficulties": [
 						"critical"
 					],
-					"minWeeklyHeadroom": 0.05,
-					"minMonthlyHeadroom": 0
+					"minWeeklyHeadroom": 0
 				},
 				{
 					"model": "openai-codex/gpt-6.1-sol",
@@ -471,8 +463,7 @@
 					"difficulties": [
 						"exact"
 					],
-					"minWeeklyHeadroom": 0.05,
-					"minMonthlyHeadroom": 0
+					"minWeeklyHeadroom": 0
 				},
 				{
 					"model": "openai-codex/gpt-6.1-sol",
@@ -497,8 +488,7 @@
 					"difficulties": [
 						"ordinary"
 					],
-					"minWeeklyHeadroom": 0.05,
-					"minMonthlyHeadroom": 0
+					"minWeeklyHeadroom": 0
 				},
 				{
 					"model": "openai-codex/gpt-6.1-sol",
@@ -523,8 +513,7 @@
 					"difficulties": [
 						"hard"
 					],
-					"minWeeklyHeadroom": 0.05,
-					"minMonthlyHeadroom": 0
+					"minWeeklyHeadroom": 0
 				},
 				{
 					"model": "openai-codex/gpt-6.1-sol",
@@ -549,8 +538,7 @@
 					"difficulties": [
 						"critical"
 					],
-					"minWeeklyHeadroom": 0.05,
-					"minMonthlyHeadroom": 0
+					"minWeeklyHeadroom": 0
 				},
 				{
 					"model": "openai-codex/gpt-6.1-sol",

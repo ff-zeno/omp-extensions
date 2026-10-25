@@ -40,6 +40,12 @@ if [[ -e "$TARGET" && ! -f "$TARGET" ]]; then
   printf 'Refusing to replace %s: it is not a regular file.\n' "$TARGET" >&2
   exit 1
 fi
+# A PATH wrapper script (for example one that runs omp inside a resource-limited scope)
+# must survive: replacing it would install the binary in its place and drop the wrapper.
+if [[ -f "$TARGET" && "$(head -c 2 -- "$TARGET")" == '#!' ]]; then
+  printf 'Refusing to replace %s: it is a script wrapper. Point OMP_BIN at the real binary.\n' "$TARGET" >&2
+  exit 1
+fi
 
 # Target the installed stock version unless OMP_VERSION is set. Read it from the binary
 # we are about to replace, so `omp update` followed by this script needs no arguments.

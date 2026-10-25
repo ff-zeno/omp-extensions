@@ -117,7 +117,14 @@ Every worker pool's fallback is `openai-codex/gpt-6.1-sol` low, used only when e
 | `review` | critical | Opus high | Grok xhigh | Sol xhigh |
 
 Sonnet is named literally with no role and never runs above low.
-The OpenAI tier is `openai-codex/gpt-5.6-luna` (mechanical and commit) and `openai-codex/gpt-6.1-sol` (code and review); they gate only at `minWeeklyHeadroom` 0 (no faster than weekly pace), because the Codex usage report carries only a 7-day window and a `maxShortUsed` gate would make them permanently ineligible.
+Anthropic members are eligible while the 5-hour window is under 70% used (`maxShortUsed` 0.7) and weekly headroom is at least 0.10 (`minWeeklyHeadroom` 0.1).
+xAI (`@frontier-3`, Grok) and OpenAI (`openai-codex/gpt-5.6-luna` in mechanical and commit, `openai-codex/gpt-6.1-sol` in code and review) share one gate: `minWeeklyHeadroom` 0, so they are eligible while weekly usage is not ahead of the weekly pace.
+Neither has a monthly gate or a short-window gate; both providers report only a 7-day window.
+OpenAI's in-flight burst penalty counts against its weekly window, like xAI.
+A gated member with no usage report, or a report that lacks a valid gated window, gets `no-usage` and is ranked last after crowded members; stale and partial reports still exclude.
+A window at or above `demoteAt` 0.8 crowds a member; at or above `skipAt` 0.95, or exhausted, it is skipped.
+Within 12 hours of a weekly reset, weekly crowding is lifted; within 5 hours, the weekly pace check and weekly `skipAt` are lifted (only exhaustion still stops new work).
+Ungated members (the `plan-review` pool) have no usage-window gates; only failure demotion applies.
 `openai-codex/gpt-6.1-sol` is review-only as a role alias (the `@frontier-2`, `@slow2`, `@advisor`, and `@manager` aliases stay review-only), while the literal id serves the `code` and `review` pools.
 `openai-codex/gpt-5.6-luna` is blocked as a `Directive:` target but serves the `mechanical` and `commit` pools; the `web` role also names it literally.
 A planning request first passes the catalog readiness check.

@@ -341,7 +341,7 @@ describe("plan-review author exclusion", () => {
 
 describe("pool ranking", () => {
 	const members = [
-		member("xai-oauth", "grok-4.6", { penaltyKind: "weekly", minWeeklyHeadroom: 0.05, minMonthlyHeadroom: 0 }),
+		member("xai-oauth", "grok-4.6", { penaltyKind: "weekly", minWeeklyHeadroom: 0 }),
 		member("anthropic", "claude-sonnet-5-5", { maxShortUsed: 0.7, minWeeklyHeadroom: 0.1 }),
 	];
 
@@ -359,6 +359,65 @@ describe("pool ranking", () => {
 		const stale = report("xai-oauth", 0.1, Date.now() - catalog.poolLimits.maxReportAgeMs - 60_000);
 		const ranked = rankPool(members, { reports: [stale], credentialCounts: {} }, new Map(), [], catalog.poolLimits, Date.now());
 		expect(ranked.verdicts["xai-oauth/grok-4.6"]?.status).toBe("stale");
+	});
+
+	const hour = 60 * 60 * 1000;
+	const week = 7 * 24 * hour;
+	const weeklyReport = (provider: string, used: number, untilResetMs: number) => {
+		const now = Date.now();
+		// xAI usage is read only from its aggregate credit pool.
+		const id = provider === "xai-oauth" ? "xai-oauth:credits:weekly" : `${provider}:weekly`;
+		return {
+			provider,
+			fetchedAt: now,
+			limits: [
+				{
+					id,
+					label: id,
+					scope: { provider, shared: true },
+					window: { id, label: id, durationMs: week, resetsAt: now + untilResetMs },
+					amount: { unit: "percent", usedFraction: used },
+				},
+			],
+		};
+	};
+	const luna = member("openai-codex", "gpt-5.6-luna", { penaltyKind: "weekly", minWeeklyHeadroom: 0 });
+	const lunaStatus = (used: number, untilResetMs: number) =>
+		rankPool([luna], { reports: [weeklyReport("openai-codex", used, untilResetMs)], credentialCounts: {} }, new Map(), [], catalog.poolLimits, Date.now())
+			.verdicts["openai-codex/gpt-5.6-luna"]?.status;
+
+	test("a weekly pace gate of 0 admits usage behind pace and rejects usage ahead of it", () => {
+		// report() puts the weekly window at 20% elapsed.
+		const status = (used: number) =>
+			rankPool([members[0]!], { reports: [report("xai-oauth", used)], credentialCounts: {} }, new Map(), [], catalog.poolLimits, Date.now())
+				.verdicts["xai-oauth/grok-4.6"]?.status;
+		expect(status(0.15)).toBe("eligible");
+		expect(status(0.25)).toBe("below-pace");
+	});
+
+	test("ranks a gated member with no usage report after crowded members instead of excluding it", () => {
+		const ranked = rankPool(
+			[luna, members[0]!],
+			{ reports: [weeklyReport("xai-oauth", 0.82, 24 * hour)], credentialCounts: {} },
+			new Map(),
+			[],
+			catalog.poolLimits,
+			Date.now(),
+		);
+		expect(ranked.verdicts["xai-oauth/grok-4.6"]?.status).toBe("crowded");
+		expect(ranked.verdicts["openai-codex/gpt-5.6-luna"]?.status).toBe("no-usage");
+		expect(ranked.order).toEqual(["xai-oauth/grok-4.6", "openai-codex/gpt-5.6-luna"]);
+	});
+
+	test("lifts weekly crowding 12 hours before a weekly reset", () => {
+		expect(lunaStatus(0.85, 13 * hour)).toBe("crowded");
+		expect(lunaStatus(0.85, 11 * hour)).toBe("eligible");
+	});
+
+	test("lifts the weekly skip threshold 5 hours before a weekly reset, but not exhaustion", () => {
+		expect(lunaStatus(0.96, 6 * hour)).toBe("skipped");
+		expect(lunaStatus(0.96, 4 * hour)).toBe("eligible");
+		expect(lunaStatus(1, 4 * hour)).toBe("skipped");
 	});
 
 	test("maps provider limits into the three pacing windows", () => {

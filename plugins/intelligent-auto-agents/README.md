@@ -25,8 +25,8 @@ The plugin (bundled agents, the skill, `/auto-agents`, and the routing hook) loa
 The patched OMP build lets the hook set each subagent's model and thinking level; without it the plugin loads and Jev routing stays disabled.
 
 Requirements:
-- OMP 18.11.0. The bundled patch targets that release; another release needs a rebased patch (see [core/PATCHING.md](core/PATCHING.md)).
-- `git` and Bun 1.4 or newer to build the patched OMP (OMP 18.11.0 declares `bun@>=1.4`). Running the plugin needs only OMP.
+- OMP 18.12.2. The bundled patch targets that release; another release needs a rebased patch (see [core/PATCHING.md](core/PATCHING.md)).
+- `git` and Bun 1.4 or newer to build the patched OMP (OMP 18.12.2 declares `bun@>=1.4`). Running the plugin needs only OMP.
 - `sha256sum` (Linux) or `shasum` (macOS) for the installer.
 - Rust `cargo` from rustup only when no matching prebuilt native addon is in `~/.omp/natives/<version>`; running the stock `omp` once fills that directory.
 - A TypeSafe API key for Jev (see [TypeSafe authentication](#typesafe-authentication)). Without one, every spawn keeps its configured model and effort.
@@ -35,9 +35,9 @@ Requirements:
 
 Run these steps in order and check each result before the next; an AI agent setting this up can follow them as written.
 
-1. Install stock OMP 18.11.0 and confirm `omp --version` prints `omp/18.11.0`:
+1. Install stock OMP 18.12.2 and confirm `omp --version` prints `omp/18.12.2`:
    ```
-   curl -fsSL https://omp.sh/install | sh -s -- --binary --ref v18.11.0
+   curl -fsSL https://omp.sh/install | sh -s -- --binary --ref v18.12.2
    ```
 2. Clone this repository and build the patched OMP. The installer replaces the `omp` on `PATH` only after the patched tests pass, and prints the backup path and rollback command:
    ```
@@ -111,7 +111,7 @@ To remove the patched OMP build, follow the rollback steps under [Patched OMP re
 
 ## Patched OMP requirement
 
-The extension requires OMP subagent routing API v2 from the pinned OMP 18.11.0 source commit `c2cb79e4c227aa4b22c4ccb933ff72fd88bceba4`.
+The extension requires OMP subagent routing API v2 from the pinned OMP 18.12.2 source commit `1d5aff90b057ce7dbfe32ea557a527c1b3144b72`.
 The bundled patch in `core/` targets that release; [core/PATCHING.md](core/PATCHING.md) explains what it changes and how to rebase it onto a future release.
 
 On stock OMP, the extension logs a warning and `/auto-agents` reports that routing is unavailable.
@@ -203,13 +203,13 @@ This package bundles `orchestrator`, `design-master`, `design-second`, `review-f
 
 OMP also supplies its built-in `task`, `scout`, `sonic`, `reviewer`, and `security-reviewer` agents used by the catalog. The pinned `review-closer` and `review-verifier` agents are profile agents, not bundled here.
 
-OMP 18.11.0 discovers the nearest project `.omp/agents` directory first, then the user agent directory `~/.omp/agent/agents`, then enabled extension package agent directories, and finally bundled agents.
+OMP 18.12.2 discovers the nearest project `.omp/agents` directory first, then the user agent directory `~/.omp/agent/agents`, then enabled extension package agent directories, and finally bundled agents.
 
 Therefore a project or user agent with the same exact, case-sensitive name wins over this package's bundled copy.
 
 Earlier extension roots also win over later extension roots, and invalid files are skipped with a warning.
 
-See [OMP 18.11.0 task-agent discovery](https://github.com/can1357/oh-my-pi/blob/c2cb79e4c227aa4b22c4ccb933ff72fd88bceba4/docs/task-agent-discovery.md#merge-and-collision-rules) for the precedence and collision rules.
+See [OMP 18.12.2 task-agent discovery](https://github.com/can1357/oh-my-pi/blob/1d5aff90b057ce7dbfe32ea557a527c1b3144b72/docs/task-agent-discovery.md#merge-and-collision-rules) for the precedence and collision rules.
 
 ## `/auto-agents`
 
@@ -244,10 +244,12 @@ Keep the catalog version and schema valid; the plugin refuses to load a catalog 
 
 `personas` controls the persona suggestion: `agents` lists the agents Jev suggests a persona for, `instructions` and `criteria` (one description per persona, `normal` and `brute`) go to Jev verbatim, and `maxDifficulty` caps Brute: a worker rated harder than this level, or not rated at all, gets Normal.
 
-Each quota threshold that is set requires its window: a member without that window in its usage report is not eligible.
-`poolLimits` holds the shared guardrails: `demoteAt`, `skipAt`, the per-dispatch `burstPenalty`, `burstPenaltyWindow` (which quota window a provider's in-flight burst penalty counts against, keyed by provider with a required `*` default), `finalWindowMs`, usage timeout and maximum report age, clock-skew tolerance, and the failure streak and duration for demotion.
-Within `finalWindowMs` of a weekly reset, unused weekly quota would be lost, so the weekly pace check and weekly crowding are lifted and the short-window cap rises to `demoteAt`.
-In that stretch, in-flight burst penalties also count against the weekly window, and `skipAt` stops new work, so running tasks keep `1 - skipAt` of the quota to finish.
+A gated member whose provider has no usage report, or whose report lacks a valid gated window, gets status `no-usage` and is ranked last, after crowded members.
+Stale and partial reports still exclude a member.
+No shipped member sets `minMonthlyHeadroom`.
+`poolLimits` holds the shared guardrails: `demoteAt`, `skipAt`, the per-dispatch `burstPenalty`, `burstPenaltyWindow` (which quota window a provider's in-flight burst penalty counts against, keyed by provider with a required `*` default; the shipped catalog sets `xai-oauth` and `openai-codex` to `weekly`), `finalWindowMs`, `weeklyCrowdLiftMs`, usage timeout and maximum report age, clock-skew tolerance, and the failure streak and duration for demotion.
+Within `weeklyCrowdLiftMs` of a weekly reset, weekly crowding at `demoteAt` is lifted.
+Within `finalWindowMs` of a weekly reset, the weekly pace check and the weekly `skipAt` are lifted (only exhaustion still stops new work), burst penalties also count against the weekly window, and the short-window cap rises to `demoteAt`.
 Usage comes from the same provider reports as `/usage`. Antigravity is read through its Gemini counter, xAI through its aggregate credit pool, and Anthropic through its shared 5-hour and weekly windows. The plugin assumes `providers.antigravityEndpoint` is `auto`.
 
 ## Persona suggestions

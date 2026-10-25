@@ -86,11 +86,13 @@ export type PoolLimits = {
 	burstPenalty: number;
 	/**
 	 * Final stretch before a weekly reset. Inside it, unused weekly quota is lost, so the
-	 * weekly pace check and weekly crowding are lifted, in-flight burst penalties also count
-	 * against the weekly window, and the short-window cap rises to demoteAt. skipAt still
-	 * stops new work, leaving 1 - skipAt for tasks that are already running.
+	 * weekly pace check and the weekly skipAt are lifted (only exhaustion stops new work),
+	 * in-flight burst penalties also count against the weekly window, and the short-window
+	 * cap rises to demoteAt.
 	 */
 	finalWindowMs: number;
+	/** Within this span of a weekly reset, weekly crowding at demoteAt is lifted. */
+	weeklyCrowdLiftMs: number;
 	usageTimeoutMs: number;
 	maxReportAgeMs: number;
 	clockSkewMs: number;
@@ -325,6 +327,7 @@ function poolLimits(value: unknown): value is PoolLimits {
 		value.demoteAt < value.skipAt &&
 		unit(value.burstPenalty) &&
 		positiveInteger(value.finalWindowMs, 86_400_000) &&
+		positiveInteger(value.weeklyCrowdLiftMs, 86_400_000) &&
 		positiveInteger(value.usageTimeoutMs, 60_000) &&
 		positiveInteger(value.maxReportAgeMs, 86_400_000) &&
 		positiveInteger(value.clockSkewMs, 3_600_000) &&
@@ -823,6 +826,7 @@ export function rankPool(
 	const skipped: string[] = [];
 	const telemetryDemoted: string[] = [];
 	const crowded: string[] = [];
+	const unmetered: string[] = [];
 	const verdicts: Record<string, PoolVerdict> = {};
 	for (const member of members) {
 		const memberReports = reports.filter(report => report.provider === member.model.provider);
@@ -855,6 +859,7 @@ export function rankPool(
 		let hasAnySample = false;
 		let weeklySeen = false;
 		let weeklyAllFinal = true;
+		let weeklyAllCrowdLifted = true;
 		for (const report of memberReports) {
 			const samples = windowSamples(report, member.model.id);
 			const validKinds = new Set<WindowKind>();
@@ -869,15 +874,18 @@ export function rankPool(
 					continue;
 				}
 				validKinds.add(sample.kind);
-				const finalWeekly =
-					sample.kind === "weekly" && (sample.resetsAt as number) - nowMs <= limits.finalWindowMs;
+				const untilReset = (sample.resetsAt as number) - nowMs;
+				const finalWeekly = sample.kind === "weekly" && untilReset <= limits.finalWindowMs;
 				if (sample.kind === "weekly") {
 					weeklySeen = true;
 					if (!finalWeekly) weeklyAllFinal = false;
+					if (untilReset > limits.weeklyCrowdLiftMs) weeklyAllCrowdLifted = false;
 				}
 				const penalized = sample.kind === targetPenaltyKind || finalWeekly;
 				const adjustedUsed = sample.usedFraction + (penalized ? basePenalty : 0);
-				if (sample.exhausted || adjustedUsed >= limits.skipAt) shouldSkip = true;
+				// Weekly quota left in the final stretch is lost at reset, so only a spent window stops new work there.
+				const spent = sample.exhausted || sample.usedFraction >= 1;
+				if (spent || (adjustedUsed >= limits.skipAt && !finalWeekly)) shouldSkip = true;
 				used[sample.kind] = Math.max(used[sample.kind] ?? Number.NEGATIVE_INFINITY, adjustedUsed);
 				const elapsed = Math.min(
 					1,
@@ -912,7 +920,14 @@ export function rankPool(
 			continue;
 		}
 		if (!memberReports.length || !hasAnySample || invalidRequired) {
-			verdict.status = "no-usage";
+			// Unknown usage is a last resort, not an exclusion: rank it after every metered member.
+			if (memberIsDemoted(demoted, member)) {
+				verdict.status = "demoted";
+				telemetryDemoted.push(member.id);
+			} else {
+				verdict.status = "no-usage";
+				unmetered.push(member.id);
+			}
 			continue;
 		}
 		verdict.used = used;
@@ -937,8 +952,9 @@ export function rankPool(
 			verdict.status = "below-pace";
 			continue;
 		}
+		const crowdLifted = weeklySeen && weeklyAllCrowdLifted;
 		const isCrowded = Object.entries(used).some(
-			([kind, value]) => value !== undefined && value >= limits.demoteAt && !(finalStretch && kind === "weekly"),
+			([kind, value]) => value !== undefined && value >= limits.demoteAt && !(crowdLifted && kind === "weekly"),
 		);
 		if (memberIsDemoted(demoted, member)) {
 			verdict.status = "demoted";
@@ -951,7 +967,7 @@ export function rankPool(
 			order.push(member.id);
 		}
 	}
-	order.push(...crowded);
+	order.push(...crowded, ...unmetered);
 	return { order, skipped, demoted: telemetryDemoted, verdicts };
 }
 
