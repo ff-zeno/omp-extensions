@@ -17,7 +17,7 @@ Jev is the router described by `catalog.json` (catalog v9). Before each covered 
 - **Covered agent** means an agent routed through a task type: `task`, `sonic`, `scout`, `reviewer`, `security-reviewer`, `git`, and `plan`.
 - **Pinned agent** means an agent that keeps its bound model while Jev sets only effort: `orchestrator`, `design-master`, `design-second`, `review-closer`, `review-verifier`, `review-frontier-1`, `review-frontier-2`, `review-frontier-3`, and the chat-cycle roles `medium` and `slow1`–`slow3`.
 - **Task type** means a named kind of work — `mechanical`, `commit`, `code`, `review`, `lead`, `vision`, `security-review`, `plan`, `plan-review`, `frontier-review` — with a fixed model or a pool, plus an effort range.
-- **Pool** means an ordered member list (`mechanical`, `commit`, `code`, `review`, `plan-review`) that Jev ranks by quota before each spawn.
+- **Pool** means an ordered member list (`mechanical`, `commit`, `code`, `review`, `lead`, `plan-review`) that Jev ranks by quota before each spawn.
 - **Difficulty** means `exact`, `ordinary`, `hard`, or `critical`, rated from the work itself.
 - **Difficulty-to-effort map** means the per-model effort for each difficulty; the task-type range clamps it and the model's supported efforts trim it.
 - **Directive** means a `Directive:` line in the brief naming a role alias, literal model, or task type, with an optional effort.
@@ -82,8 +82,8 @@ Covered agents resolve a task type, then that type's pool or fixed model:
 - `sonic` uses `mechanical` for non-code writes with exact content (docs text, config values, data files) and directed tool runs; any source-code edit, however trivial, goes to `task`.
 - `scout` uses `code` for read-only investigation.
 - `git` is pinned to `commit` for commits, branches, merges, and pull requests.
-- `plan` uses the fixed `plan` model and may be rated for difficulty.
-- `security-reviewer` uses `security-review`.
+- `plan` uses the quota-aware `lead` pool at medium to xhigh and may be rated for difficulty.
+- `security-reviewer` uses `security-review`, sharing the quota-aware `lead` pool at high to xhigh.
 
 Pinned agents keep their bound `modelRoles`; Jev sets only effort from the model's difficulty-to-effort map:
 
@@ -94,8 +94,9 @@ Pinned agents keep their bound `modelRoles`; Jev sets only effort from the model
 
 Jev rates difficulty as Exact, Ordinary, Hard, or Critical according to the catalog ladder.
 A pool member scoped with `difficulties` serves only those levels.
-Each worker pool lists one member per provider per difficulty, tried Anthropic, then xAI, then OpenAI, because Haiku, Sonnet, and Opus share one Anthropic quota, so rolling over inside a provider buys nothing.
-Every worker pool's fallback is `openai-codex/gpt-6.1-sol` low, used only when every member is quota-skipped.
+The `mechanical`, `commit`, `code`, and `review` pools list one member per provider per difficulty, tried Anthropic, then xAI, then OpenAI, because Haiku, Sonnet, and Opus share one Anthropic quota, so rolling over inside a provider buys nothing.
+The `mechanical`, `commit`, `code`, and `review` pools fall back to `openai-codex/gpt-6.1-sol` low when every member is quota-skipped.
+The `lead`, `plan`, and `security-review` task types share the role-only `lead` pool: `@frontier-1` → `@frontier-2` → `@frontier-3`. Anthropic uses the same quota gates as other worker pools; the other members use weekly headroom 0. Opus keeps its model-map effort, clamped to high–xhigh for lead/security review and medium–xhigh for planning. Both rollover members set `effortFrom: "@frontier-1"`; frontier-2 matches that effort, while frontier-3 sets `effortStep: 1` for one level higher, capped at xhigh. Members do not pin effort. Remaining eligible members stay in the provider-failure retry chain. The all-skipped fallback is `@frontier-2:xhigh`.
 
 | Pool | Difficulty | Anthropic | xAI (Grok) | OpenAI |
 |---|---|---|---|---|
@@ -123,9 +124,9 @@ Neither has a monthly gate or a short-window gate; both providers report only a 
 OpenAI's in-flight burst penalty counts against its weekly window, like xAI.
 A gated member with no usage report, or a report that lacks a valid gated window, gets `no-usage` and is ranked last after crowded members; stale and partial reports still exclude.
 A window at or above `demoteAt` 0.8 crowds a member; at or above `skipAt` 0.95, or exhausted, it is skipped.
-Within 12 hours of a weekly reset, weekly crowding is lifted; within 5 hours, the weekly pace check and weekly `skipAt` are lifted (only exhaustion still stops new work).
+Within 12 hours of a weekly reset, weekly crowding is lifted; within 5 hours, the weekly pace check and weekly `skipAt` are lifted (weekly exhaustion still stops new work), and Anthropic's short-window cap rises from 0.7 to `demoteAt` 0.8.
 Ungated members (the `plan-review` pool) have no usage-window gates; only failure demotion applies.
-`openai-codex/gpt-6.1-sol` is review-only as a role alias (the `@frontier-2`, `@slow2`, `@advisor`, and `@manager` aliases stay review-only), while the literal id serves the `code` and `review` pools.
+Protected aliases (`@frontier-2`, `@slow2`, `@advisor`, `@manager`) are restricted to the `plan-review` and `lead` pools by `reviewOnly`; they remain rejected in ordinary worker pools. Literal Sol serves code and review; the lead pool uses role references, so role rebinding changes its models.
 `openai-codex/gpt-5.6-luna` is blocked as a `Directive:` target but serves the `mechanical` and `commit` pools; the `web` role also names it literally.
 A planning request first passes the catalog readiness check.
 An autonomous planner is allowed only when requirements, target files, acceptance criteria, and technical constraints are concrete.
@@ -165,6 +166,7 @@ Jev evaluates routing requests through TypeSafe.
 Authenticate with `/login typesafe` or set `TYPESAFE_API_KEY`.
 Without a TypeSafe key, Jev records a baseline decision and keeps the configured model and effort.
 Jev failures, low confidence, routing disabled, locked requests, and unresolvable pools also keep the baseline configuration.
+Quota is not a global dispatch cap: `plan-review` members are ungated, missing usage can still select Anthropic, and a failed usage fetch preserves pool order. Fixed `vision` keeps its provider-failure `@lead` backup without quota checks; directives and pinned agents also intentionally bypass pool gates. All-skipped worker fallbacks do not recheck quota.
 
 ## Visibility
 

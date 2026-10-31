@@ -34,6 +34,7 @@ import {
 	preferPlanReviewMembers,
 	rankPool,
 	RoutingAuthenticationError,
+	stepEffort,
 	taskTypeEffortVaries,
 	type UsageSummary,
 } from "./routing";
@@ -116,7 +117,7 @@ type RouteOption = {
 	slot: string;
 	model: ModelRef;
 	exact: string;
-	effort?: string;
+	effort?: Effort;
 };
 function record(value: unknown): value is Record<string, unknown> {
 	return value !== null && typeof value === "object" && !Array.isArray(value);
@@ -911,12 +912,17 @@ export function register(pi: ExtensionAPI): void {
 				poolMembers = pool.members.flatMap(spec => {
 					const model = resolveModel(spec.model);
 					if (!model) return [];
+					const effortBase = spec.effortFrom === undefined ? undefined :
+						optionForModel(spec.effortFrom, taskType.effort)?.effort;
+					if (spec.effortFrom !== undefined && effortBase === undefined) return [];
 					const counter = counterForModel(model, []);
 					return [
 						{
 							id: spec.id ?? `${model.provider}/${model.id}`,
 							model,
 							...(spec.effort !== undefined ? { effort: spec.effort } : {}),
+							...(effortBase !== undefined ? { effortBase } : {}),
+							...(spec.effortStep !== undefined ? { effortStep: spec.effortStep } : {}),
 							...(spec.difficulties !== undefined ? { difficulties: spec.difficulties } : {}),
 							...(spec.maxShortUsed !== undefined ? { maxShortUsed: spec.maxShortUsed } : {}),
 							...(spec.minWeeklyHeadroom !== undefined ? { minWeeklyHeadroom: spec.minWeeklyHeadroom } : {}),
@@ -955,9 +961,19 @@ export function register(pi: ExtensionAPI): void {
 					if (!member) continue;
 					const modelId = `${member.model.provider}/${member.model.id}`;
 					const supported = getSupportedEfforts(member.model);
-					const effort = member.effort
-						? fitEffort(capEffort(catalog, modelId, member.effort), supported)
-						: effortForModel(catalog, modelId, difficulty, taskType.effort, supported);
+					let effort: Effort | undefined;
+					if (member.effort !== undefined) {
+						effort = fitEffort(capEffort(catalog, modelId, member.effort), supported);
+					} else if (member.effortBase !== undefined || member.effortStep !== undefined) {
+						const base = member.effortBase ??
+							effortForModel(catalog, modelId, difficulty, taskType.effort, supported);
+						if (base !== undefined) {
+							const wanted = stepEffort(base, member.effortStep ?? 0, taskType.effort);
+							effort = fitEffort(capEffort(catalog, modelId, wanted), supported);
+						}
+					} else {
+						effort = effortForModel(catalog, modelId, difficulty, taskType.effort, supported);
+					}
 					if (effort) pushUnique({ slot: id, model: member.model, exact: modelId, effort });
 				}
 				if (!attempts.length) pushUnique(optionForModel(pool.fallback.model, taskType.effort, pool.fallback.effort));

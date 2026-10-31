@@ -145,7 +145,8 @@
 			"astra"
 		],
 		"pools": [
-			"plan-review"
+			"plan-review",
+			"lead"
 		]
 	},
 	"poolLimits": {
@@ -554,6 +555,30 @@
 				"effort": "low"
 			}
 		},
+		"lead": {
+			"members": [
+				{
+					"model": "@frontier-1",
+					"maxShortUsed": 0.7,
+					"minWeeklyHeadroom": 0.1
+				},
+				{
+					"model": "@frontier-2",
+					"effortFrom": "@frontier-1",
+					"minWeeklyHeadroom": 0
+				},
+				{
+					"model": "@frontier-3",
+					"effortFrom": "@frontier-1",
+					"effortStep": 1,
+					"minWeeklyHeadroom": 0
+				}
+			],
+			"fallback": {
+				"model": "@frontier-2",
+				"effort": "xhigh"
+			}
+		},
 		"plan-review": {
 			"excludePlanAuthors": true,
 			"members": [
@@ -590,13 +615,10 @@
 			"description": "Verification review of implemented code or a diff against a settled spec or plan: correctness, missed cases, and test coverage. Not judging whether the design itself is right."
 		},
 		"lead": {
-			"model": "@lead",
+			"pool": "lead",
 			"effort": [
 				"high",
 				"xhigh"
-			],
-			"backups": [
-				"@frontier-3"
 			],
 			"description": "Work where the brief leaves a real decision open: choosing interfaces or architecture, weighing trade-offs, finding an unknown root cause, migrations with interacting parts. Not work whose contract is already fixed."
 		},
@@ -612,7 +634,7 @@
 			"description": "Image, screenshot, or video analysis where the work is mainly looking at visual media. Not code changes that merely mention an image."
 		},
 		"security-review": {
-			"model": "@lead",
+			"pool": "lead",
 			"effort": [
 				"high",
 				"xhigh"
@@ -620,7 +642,7 @@
 			"description": "Security review: finding exploitable vulnerabilities, auth or secret handling flaws, injection, or data exposure, with evidence."
 		},
 		"plan": {
-			"model": "@lead",
+			"pool": "lead",
 			"effort": [
 				"medium",
 				"xhigh"

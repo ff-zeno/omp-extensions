@@ -47,6 +47,10 @@ export type PoolMemberSpec = {
 	model: string;
 	/** Pins this member's effort, overriding the model map and the task-type range. */
 	effort?: Effort;
+	/** Use this role/model's difficulty effort as the base instead of this member's own map. */
+	effortFrom?: string;
+	/** Raise the mapped base by this many effort levels, capped by the task-type range. */
+	effortStep?: number;
 	/** Difficulties this member serves. Absent means every difficulty. */
 	difficulties?: Difficulty[];
 	maxShortUsed?: number;
@@ -277,7 +281,12 @@ function poolMember(value: unknown): value is PoolMemberSpec {
 		!record(value) ||
 		!text(value.model) ||
 		(value.id !== undefined && !text(value.id)) ||
-		(value.effort !== undefined && !isEffort(value.effort))
+		(value.effort !== undefined && !isEffort(value.effort)) ||
+		(value.effortFrom !== undefined && !text(value.effortFrom)) ||
+		(value.effortStep !== undefined &&
+			(typeof value.effortStep !== "number" || !Number.isInteger(value.effortStep) ||
+				value.effortStep < 0 || value.effortStep >= EFFORTS.length)) ||
+		(value.effort !== undefined && (value.effortFrom !== undefined || value.effortStep !== undefined))
 	)
 		return false;
 	const thresholds = [value.maxShortUsed, value.minWeeklyHeadroom, value.minMonthlyHeadroom];
@@ -563,6 +572,13 @@ export function clampEffort(wanted: Effort, range?: EffortRange): Effort {
 	return EFFORTS[Math.min(Math.max(index, EFFORTS.indexOf(min)), EFFORTS.indexOf(max))];
 }
 
+/** Raise a fitted base up to the task ceiling; zero steps preserves the source's exact effort. */
+export function stepEffort(base: Effort, steps: number, range?: EffortRange): Effort {
+	if (steps === 0) return base;
+	const ceiling = range ? EFFORTS.indexOf(range[1]) : EFFORTS.length - 1;
+	return EFFORTS[Math.min(EFFORTS.indexOf(base) + steps, ceiling)];
+}
+
 /** Cap an effort at the model's catalog `maxEffort`; models without one are unconstrained. */
 export function capEffort(catalog: Catalog, modelId: string, effort: Effort): Effort {
 	const maxEffort = catalog.models[modelId]?.maxEffort;
@@ -706,6 +722,9 @@ export type PoolMember = {
 	id: string;
 	model: ModelRef;
 	effort?: Effort;
+	/** Already mapped and fitted effort from the catalog's effortFrom model. */
+	effortBase?: Effort;
+	effortStep?: number;
 	difficulties?: Difficulty[];
 	maxShortUsed?: number;
 	minWeeklyHeadroom?: number;

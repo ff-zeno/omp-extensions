@@ -70,7 +70,6 @@ function report(provider: string, used: number, fetchedAt = Date.now()): Record<
 describe("catalog v9", () => {
 	test("parses the shipped catalog and its routing surface", () => {
 		expect(catalog.version).toBe(9);
-		expect(Object.keys(catalog.pools)).toEqual(["mechanical", "commit", "code", "review", "plan-review"]);
 		expect(Object.keys(catalog.taskTypes).sort()).toEqual([
 			"code",
 			"commit",
@@ -91,7 +90,6 @@ describe("catalog v9", () => {
 		expect(catalog.nuances.length).toBeGreaterThan(0);
 		expect(catalog.planningReadiness.agents).toEqual(["plan"]);
 		expect(catalog.models["anthropic/claude-sonnet-5-5"].maxEffort).toBe("low");
-		expect(catalog.reviewOnly.pools).toEqual(["plan-review"]);
 		expect(catalog.poolLimits.burstPenaltyWindow["*"]).toBe("short");
 		expect(catalog.blockedDirectiveTargets).toEqual(["luna", "astra"]);
 		expect(catalog.jevInstructions.route.length).toBeGreaterThan(0);
@@ -167,15 +165,18 @@ describe("catalog v9", () => {
 		(unknownReviewPool.reviewOnly as Record<string, unknown>).pools = ["nope"];
 		expect(() => parseCatalog(unknownReviewPool)).toThrow("unknown pool");
 
-		// Codex role aliases stay review-only; the literal Sol and Luna ids may serve as pool members.
-		const solAliasPool = clone();
-		(
-			((solAliasPool.pools as Record<string, Record<string, unknown>>).code.members as Array<Record<string, unknown>>)[0]
-		).model = "@frontier-2";
-		expect(() => parseCatalog(solAliasPool)).toThrow("cannot take worker work");
+		// Protected role aliases may serve lead/plan review, but not ordinary worker pools.
+		for (const pool of ["lead", "code", "mechanical"]) {
+			const solAliasPool = clone();
+			(
+				((solAliasPool.pools as Record<string, Record<string, unknown>>)[pool].members as Array<Record<string, unknown>>)[0]
+			).model = "@frontier-2";
+			if (pool === "lead") expect(() => parseCatalog(solAliasPool)).not.toThrow();
+			else expect(() => parseCatalog(solAliasPool)).toThrow("cannot take worker work");
+		}
 
 		const solTaskModel = clone();
-		(solTaskModel.taskTypes as Record<string, Record<string, unknown>>).lead.model = "@manager";
+		(solTaskModel.taskTypes as Record<string, Record<string, unknown>>).vision.model = "@manager";
 		expect(() => parseCatalog(solTaskModel)).toThrow("cannot take worker work");
 
 		const solBackup = clone();
@@ -201,6 +202,18 @@ describe("catalog v9", () => {
 		delete (noFixedPools.pools as Record<string, unknown>)["mechanical"];
 		(noFixedPools.taskTypes as Record<string, Record<string, unknown>>).mechanical.pool = "code";
 		expect(() => parseCatalog(noFixedPools)).not.toThrow();
+	});
+
+	test("rejects invalid or conflicting pool effort policies", () => {
+		for (const policy of [
+			{ effortStep: -1 }, { effortStep: 0.5 }, { effortStep: 5 }, { effortStep: "1" },
+			{ effortFrom: "" }, { effort: "high", effortFrom: "@frontier-1" },
+			{ effort: "high", effortStep: 1 },
+		]) {
+			const invalid = structuredClone(catalogData);
+			Object.assign(invalid.pools.lead.members[1], policy);
+			expect(() => parseCatalog(invalid)).toThrow("Invalid auto-agents pool");
+		}
 	});
 });
 

@@ -225,7 +225,7 @@ function reset(): void {
 	resetSpeedPoolStateForTests();
 }
 
-function usageReport(provider: string, modelId: string, fetchedAt = Date.now(), used = 0.1): Record<string, unknown> {
+function usageReport(provider: string, modelId: string, fetchedAt = Date.now(), used = 0.1, weeklyUsed = used): Record<string, unknown> {
 	const shortDuration = 5 * 60 * 60 * 1000;
 	const weeklyDuration = 7 * 24 * 60 * 60 * 1000;
 	const limit = (id: string, durationMs: number, value: number, elapsed: number, shared = false) => ({
@@ -236,7 +236,7 @@ function usageReport(provider: string, modelId: string, fetchedAt = Date.now(), 
 		amount: { unit: "percent", usedFraction: value },
 	});
 	if (provider === "anthropic")
-		return { provider, fetchedAt, limits: [limit("anthropic:5h", shortDuration, used, 0.2, true), limit("anthropic:7d", weeklyDuration, used, 0.2, true)] };
+		return { provider, fetchedAt, limits: [limit("anthropic:5h", shortDuration, used, 0.2, true), limit("anthropic:7d", weeklyDuration, weeklyUsed, 0.2, true)] };
 	if (provider === "xai-oauth")
 		return { provider, fetchedAt, limits: [limit("xai-oauth:credits:weekly", weeklyDuration, used, 0.2), limit("xai-oauth:credits:monthly", 30 * 24 * 60 * 60 * 1000, used, 0.2)] };
 	return { provider, fetchedAt, limits: [limit(`${provider}:${modelId}:5h`, shortDuration, used, 0.2), limit(`${provider}:${modelId}:weekly`, weeklyDuration, used, 0.2)] };
@@ -317,6 +317,137 @@ describe("intelligent auto-agents runtime", () => {
 		expect(data.pool).toMatchObject({ active: "anthropic/claude-sonnet-5-5" });
 		expect(JSON.stringify(data)).not.toContain("ASSIGNMENT_TEXT");
 		expect(judgeRequests[0].state).toContain("Routing guidance:");
+	});
+
+	for (const [taskType, agent, difficulty, level, primaryEffort, grokEffort] of [
+		["lead", "task", "hard", 2, "high", "xhigh"],
+		["lead", "task", "critical", 3, "xhigh", "xhigh"],
+		["plan", "plan", "ordinary", 1, "medium", "high"],
+		["security-review", "security-reviewer", "critical", 3, "xhigh", "xhigh"],
+	] as const) {
+		for (const [condition, shortUsed, weeklyUsed, codexUsed, stage] of [
+			["healthy", 0.69, 0.05, 0.1, 0],
+			["short window at cap", 0.7, 0.05, 0.1, 1],
+			["short window above cap", 0.71, 0.05, 0.1, 1],
+			["weekly headroom below minimum", 0.1, 0.11, 0.1, 1],
+			["Anthropic and OpenAI gated", 0.7, 0.05, 0.99, 2],
+		] as const) {
+			test(`${taskType} ${difficulty} routes with ${condition}`, async () => {
+				reset();
+				readinessChoice = "autonomous-plan";
+				routeChoice = taskType;
+				difficultyScore = level;
+				const fixture = createFixture({
+					usageReports: [
+						usageReport("anthropic", "", Date.now(), shortUsed, weeklyUsed),
+						usage("openai-codex", codexUsed),
+						usage("xai-oauth"),
+					],
+				});
+				const result = await spawn(fixture, { agent });
+				const opus = "anthropic/claude-opus-5-5";
+				const sol = "openai-codex/gpt-6.1-sol";
+				const grok = "xai-oauth/grok-4.6";
+				expect(result.thinkingLevel).toBe(stage === 2 ? grokEffort : primaryEffort);
+				expect(result.model).toEqual(stage === 0
+					? [opus, `${sol}:${primaryEffort}`, `${grok}:${grokEffort}`]
+					: stage === 1 ? [sol, `${grok}:${grokEffort}`] : [grok]);
+			});
+		}
+	}
+
+	test("rollover follows the rebound frontier role while retaining frontier-1's effort", async () => {
+		reset();
+		readinessChoice = "autonomous-plan";
+		routeChoice = "plan";
+		difficultyScore = 1;
+		const fixture = createFixture({
+			bindings: { ...DEFAULT_BINDINGS, "@frontier-2": GROK, "@frontier-3": SOL },
+			usageReports: [usage("anthropic", 0.99), usage("xai-oauth"), usage("openai-codex", 0.99)],
+		});
+		expect(await spawn(fixture, { agent: "plan" })).toMatchObject({
+			model: ["xai-oauth/grok-4.6"], thinkingLevel: "medium",
+		});
+
+		reset();
+		routeChoice = "lead";
+		difficultyScore = 3;
+		const capped = createFixture({
+			bindings: { ...DEFAULT_BINDINGS, "@frontier-2": GROK, "@frontier-3": SOL },
+			usageReports: [usage("anthropic", 0.99), usage("xai-oauth", 0.99), usage("openai-codex")],
+		});
+		// Sol supports max, but the third frontier's uplift must still stop at the task ceiling.
+		expect(await spawn(capped)).toMatchObject({
+			model: ["openai-codex/gpt-6.1-sol"], thinkingLevel: "xhigh",
+		});
+	});
+
+	test("rollover preserves the source model's effort ceiling before applying the third-frontier step", async () => {
+		reset();
+		routeChoice = "lead";
+		difficultyScore = 2;
+		const fixture = createFixture({
+			bindings: { ...DEFAULT_BINDINGS, "@frontier-1": DEFAULT_BINDINGS["anthropic/claude-sonnet-5-5"] },
+			usageReports: [usage("anthropic", 0.99), usage("openai-codex"), usage("xai-oauth")],
+		});
+		expect(await spawn(fixture)).toMatchObject({
+			model: ["openai-codex/gpt-6.1-sol", "xai-oauth/grok-4.6:medium"], thinkingLevel: "low",
+		});
+	});
+
+	test("Grok rollover follows its rebound role and raises the primary's effort", async () => {
+		reset();
+		readinessChoice = "autonomous-plan";
+		routeChoice = "plan";
+		difficultyScore = 1;
+		const fixture = createFixture({
+			bindings: { ...DEFAULT_BINDINGS, "@frontier-3": model("grok-rebound", ["low", "medium", "high", "xhigh"], "xai-oauth") },
+			usageReports: [usage("anthropic", 0.99), usage("openai-codex", 0.99), usage("xai-oauth")],
+		});
+		expect(await spawn(fixture, { agent: "plan" })).toMatchObject({
+			model: ["xai-oauth/grok-rebound"], thinkingLevel: "high",
+		});
+	});
+
+	test("an unavailable effort source uses the explicit fallback instead of a rollover's own map", async () => {
+		reset();
+		routeChoice = "lead";
+		difficultyScore = 2;
+		const bindings = { ...DEFAULT_BINDINGS };
+		delete bindings["@frontier-1"];
+		const fixture = createFixture({ bindings, usageReports: ON_PACE });
+		expect(await spawn(fixture)).toMatchObject({
+			model: ["openai-codex/gpt-6.1-sol"], thinkingLevel: "xhigh",
+		});
+	});
+
+	test("lead uses the rebound frontier-2 at xhigh as its all-members-skipped fallback", async () => {
+		reset();
+		routeChoice = "lead";
+		difficultyScore = 0;
+		const fixture = createFixture({
+			bindings: { ...DEFAULT_BINDINGS, "@frontier-2": model("fallback-rebound", ["high", "xhigh"], "openai-codex") },
+			usageReports: [usage("anthropic", 0.99), usage("openai-codex", 0.99), usage("xai-oauth", 0.99)],
+		});
+		expect(await spawn(fixture)).toMatchObject({ model: ["openai-codex/fallback-rebound"], thinkingLevel: "xhigh" });
+	});
+
+	test("lead keeps a provider-failure retry chain and rolls past a suppressed Opus selector", async () => {
+		reset();
+		routeChoice = "lead";
+		difficultyScore = 3;
+		const fixture = createFixture({
+			usageReports: ON_PACE,
+			suppressedSelectors: ["anthropic/claude-opus-5-5:xhigh"],
+		});
+		expect(await spawn(fixture)).toMatchObject({
+			model: ["openai-codex/gpt-6.1-sol", "xai-oauth/grok-4.6:xhigh"],
+			thinkingLevel: "xhigh",
+		});
+		expect(decisionData(fixture).rollover).toEqual({
+			from: "anthropic/claude-opus-5-5",
+			to: "openai-codex/gpt-6.1-sol",
+		});
 	});
 
 	test("rolls over across providers, not across models of one provider", async () => {
@@ -526,11 +657,10 @@ describe("intelligent auto-agents runtime", () => {
 		readinessChoice = "autonomous-plan";
 		routeChoice = "plan";
 		const fixture = createFixture();
-		const result = await fixture.hooks.before_subagent_spawn?.(routeEvent({ agent: "plan" }), fixture.ctx);
+		await fixture.hooks.before_subagent_spawn?.(routeEvent({ agent: "plan" }), fixture.ctx);
 
-		expect(result).toMatchObject({ model: ["anthropic/claude-opus-5-5"], thinkingLevel: "medium" });
 		// Readiness and difficulty are separate Jev calls, so their usage is summed.
-		expect(decisionData(fixture).usage).toMatchObject({ totalTokens: 40 });
+		expect(decisionData(fixture)).toMatchObject({ slot: "plan", usage: { totalTokens: 40 } });
 		expect(fixture.entries.length).toBe(1);
 	});
 
