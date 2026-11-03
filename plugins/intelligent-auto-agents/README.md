@@ -25,8 +25,8 @@ The plugin (bundled agents, the skill, `/auto-agents`, and the routing hook) loa
 The patched OMP build lets the hook set each subagent's model and thinking level; without it the plugin loads and Jev routing stays disabled.
 
 Requirements:
-- OMP 18.12.2. The bundled patch targets that release; another release needs a rebased patch (see [core/PATCHING.md](core/PATCHING.md)).
-- `git` and Bun 1.4 or newer to build the patched OMP (OMP 18.12.2 declares `bun@>=1.4`). Running the plugin needs only OMP.
+- OMP 18.16.0. The bundled patch targets that release; another release needs a rebased patch (see [core/PATCHING.md](core/PATCHING.md)).
+- `git` and Bun 1.4.4 or newer to build the patched OMP (OMP 18.16.0 declares `bun@>=1.4.4`). Running the plugin needs only OMP.
 - `sha256sum` (Linux) or `shasum` (macOS) for the installer.
 - Rust `cargo` from rustup only when no matching prebuilt native addon is in `~/.omp/natives/<version>`; running the stock `omp` once fills that directory.
 - A TypeSafe API key for Jev (see [TypeSafe authentication](#typesafe-authentication)). Without one, every spawn keeps its configured model and effort.
@@ -35,9 +35,9 @@ Requirements:
 
 Run these steps in order and check each result before the next; an AI agent setting this up can follow them as written.
 
-1. Install stock OMP 18.12.2 and confirm `omp --version` prints `omp/18.12.2`:
+1. Install stock OMP 18.16.0 and confirm `omp --version` prints `omp/18.16.0`:
    ```
-   curl -fsSL https://omp.sh/install | sh -s -- --binary --ref v18.12.2
+   curl -fsSL https://omp.sh/install | sh -s -- --binary --ref v18.16.0
    ```
 2. Clone this repository and build the patched OMP. The installer replaces the `omp` on `PATH` only after the patched tests pass, and prints the backup path and rollback command:
    ```
@@ -111,7 +111,7 @@ To remove the patched OMP build, follow the rollback steps under [Patched OMP re
 
 ## Patched OMP requirement
 
-The extension requires OMP subagent routing API v2 from the pinned OMP 18.12.2 source commit `1d5aff90b057ce7dbfe32ea557a527c1b3144b72`.
+The extension requires OMP subagent routing API v2 from the pinned OMP 18.16.0 source commit `650f3a108229ee11bf68ba3377f4e8c3391cd424`.
 The bundled patch in `core/` targets that release; [core/PATCHING.md](core/PATCHING.md) explains what it changes and how to rebase it onto a future release.
 
 On stock OMP, the extension logs a warning and `/auto-agents` reports that routing is unavailable.
@@ -203,13 +203,13 @@ This package bundles `orchestrator`, `design-master`, `design-second`, `review-f
 
 OMP also supplies its built-in `task`, `scout`, `sonic`, `reviewer`, and `security-reviewer` agents used by the catalog. The pinned `review-closer` and `review-verifier` agents are profile agents, not bundled here.
 
-OMP 18.12.2 discovers the nearest project `.omp/agents` directory first, then the user agent directory `~/.omp/agent/agents`, then enabled extension package agent directories, and finally bundled agents.
+OMP 18.16.0 discovers the nearest project `.omp/agents` directory first, then the user agent directory `~/.omp/agent/agents`, then enabled extension package agent directories, and finally bundled agents.
 
 Therefore a project or user agent with the same exact, case-sensitive name wins over this package's bundled copy.
 
 Earlier extension roots also win over later extension roots, and invalid files are skipped with a warning.
 
-See [OMP 18.12.2 task-agent discovery](https://github.com/can1357/oh-my-pi/blob/1d5aff90b057ce7dbfe32ea557a527c1b3144b72/docs/task-agent-discovery.md#merge-and-collision-rules) for the precedence and collision rules.
+See [OMP 18.16.0 task-agent discovery](https://github.com/can1357/oh-my-pi/blob/650f3a108229ee11bf68ba3377f4e8c3391cd424/docs/task-agent-discovery.md#merge-and-collision-rules) for the precedence and collision rules.
 
 ## `/auto-agents`
 
@@ -238,7 +238,7 @@ Pool members may set `effortFrom` to use another role/model's mapped, task-range
 
 `taskTypes` binds each kind of work (`mechanical`, `commit`, `code`, `review`, `lead`, `vision`, `security-review`, `plan`, `plan-review`, `frontier-review`) to exactly one existing pool or fixed `model`, plus an optional `effort` range and `backups`.
 
-`lead` (open design decisions and root-cause work), `plan` (writing implementation plans), and `security-review` share the quota-aware `lead` pool: `@frontier-1` → `@frontier-2` → `@frontier-3`. Anthropic uses `maxShortUsed: 0.7` and `minWeeklyHeadroom: 0.1`; the other members use `minWeeklyHeadroom: 0`. The primary's difficulty-map effort is clamped to high–xhigh for lead/security review and medium–xhigh for planning. Both rollover members set `effortFrom: "@frontier-1"`: frontier-2 matches the primary's effort, while frontier-3 sets `effortStep: 1` and runs one step higher, capped by the task type's xhigh ceiling. No member pins effort. Remaining eligible members stay in the provider-failure retry chain; the all-skipped fallback is `@frontier-2:xhigh`.
+`lead` (open design decisions and root-cause work), `plan` (writing implementation plans), and `security-review` share the quota-aware `lead` pool: `@frontier-1` → `@frontier-2` → `@frontier-3` → `google-antigravity/gemini-4-argon`. Anthropic uses `minWeeklyHeadroom: 0.1`; the other members use `minWeeklyHeadroom: 0`. The primary's difficulty-map effort is clamped to high–xhigh for lead/security review and medium–xhigh for planning. Both frontier rollover members set `effortFrom: "@frontier-1"`: frontier-2 matches the primary's effort, while frontier-3 sets `effortStep: 1` and runs one step higher, capped by the task type's xhigh ceiling. Argon uses its own map (low, medium, high, high) under the same clamp, so planning runs it at medium for exact and ordinary work. No member pins effort. Remaining eligible members stay in the provider-failure retry chain; the all-skipped fallback is `@frontier-2:xhigh`.
 
 Quota checks are not a hard global dispatch cap. `plan-review` members are ungated; missing usage is ranked last (a failed usage fetch preserves pool order); classifier failure, low confidence, routing off, or an unresolvable route keeps the configured baseline. Fixed `vision` retains its provider-failure `@lead` backup without quota checks. When every member is skipped, the `lead` pool uses Sol xhigh and other worker pools use Sol low, without rechecking the fallback's quota. Directive models and pinned agents intentionally bypass pool gates.
 
@@ -253,10 +253,10 @@ Quota checks are not a hard global dispatch cap. `plan-review` members are ungat
 A gated member whose provider has no usage report, or whose report lacks a valid gated window, gets status `no-usage` and is ranked last, after crowded members.
 Stale and partial reports still exclude a member.
 No shipped member sets `minMonthlyHeadroom`.
-`poolLimits` holds the shared guardrails: `demoteAt`, `skipAt`, the per-dispatch `burstPenalty`, `burstPenaltyWindow` (which quota window a provider's in-flight burst penalty counts against, keyed by provider with a required `*` default; the shipped catalog sets `xai-oauth` and `openai-codex` to `weekly`), `finalWindowMs`, `weeklyCrowdLiftMs`, usage timeout and maximum report age, clock-skew tolerance, and the failure streak and duration for demotion.
+`poolLimits` holds the shared guardrails: `demoteAt`, `skipAt`, the per-dispatch `burstPenalty`, `burstPenaltyWindow` (which quota window a provider's in-flight burst penalty counts against, keyed by provider with a required `*` default; the shipped catalog sets `*` to `weekly`, because no gated provider reports a 5-hour window any more), `finalWindowMs`, `weeklyCrowdLiftMs`, usage timeout and maximum report age, clock-skew tolerance, and the failure streak and duration for demotion.
 Within `weeklyCrowdLiftMs` of a weekly reset, weekly crowding at `demoteAt` is lifted.
 Within `finalWindowMs` of a weekly reset, the weekly pace check and the weekly `skipAt` are lifted (only exhaustion still stops new work), burst penalties also count against the weekly window, and the short-window cap rises to `demoteAt`.
-Usage comes from the same provider reports as `/usage`. Antigravity is read through its Gemini counter, xAI through its aggregate credit pool, and Anthropic through its shared 5-hour and weekly windows. The plugin assumes `providers.antigravityEndpoint` is `auto`.
+Usage comes from the same provider reports as `/usage`. Antigravity is read through its Gemini counter, xAI through its aggregate credit pool, and Anthropic through its shared weekly windows (Anthropic no longer reports a 5-hour window). A member that sets `maxShortUsed` requires a 5-hour window, so a provider without one ranks that member as `no-usage`; no shipped member sets it. The plugin assumes `providers.antigravityEndpoint` is `auto`.
 
 ## Persona suggestions
 

@@ -127,6 +127,17 @@
 			"hard": "high",
 			"critical": "high"
 		},
+		"google-antigravity/gemini-4-argon": {
+			"supports": [
+				"low",
+				"medium",
+				"high"
+			],
+			"exact": "low",
+			"ordinary": "medium",
+			"hard": "high",
+			"critical": "high"
+		},
 		"*": {
 			"exact": "low",
 			"ordinary": "medium",
@@ -161,9 +172,7 @@
 		"failureDemoteAfter": 2,
 		"demoteForMs": 1800000,
 		"burstPenaltyWindow": {
-			"xai-oauth": "weekly",
-			"openai-codex": "weekly",
-			"*": "short"
+			"*": "weekly"
 		}
 	},
 	"pools": {
@@ -176,7 +185,6 @@
 						"exact",
 						"ordinary"
 					],
-					"maxShortUsed": 0.7,
 					"minWeeklyHeadroom": 0.1
 				},
 				{
@@ -203,7 +211,6 @@
 					"difficulties": [
 						"hard"
 					],
-					"maxShortUsed": 0.7,
 					"minWeeklyHeadroom": 0.1
 				},
 				{
@@ -228,7 +235,6 @@
 					"difficulties": [
 						"critical"
 					],
-					"maxShortUsed": 0.7,
 					"minWeeklyHeadroom": 0.1
 				},
 				{
@@ -262,7 +268,6 @@
 						"exact",
 						"ordinary"
 					],
-					"maxShortUsed": 0.7,
 					"minWeeklyHeadroom": 0.1
 				},
 				{
@@ -289,7 +294,6 @@
 					"difficulties": [
 						"hard"
 					],
-					"maxShortUsed": 0.7,
 					"minWeeklyHeadroom": 0.1
 				},
 				{
@@ -314,7 +318,6 @@
 					"difficulties": [
 						"critical"
 					],
-					"maxShortUsed": 0.7,
 					"minWeeklyHeadroom": 0.1
 				},
 				{
@@ -347,7 +350,6 @@
 					"difficulties": [
 						"exact"
 					],
-					"maxShortUsed": 0.7,
 					"minWeeklyHeadroom": 0.1
 				},
 				{
@@ -372,7 +374,6 @@
 					"difficulties": [
 						"ordinary"
 					],
-					"maxShortUsed": 0.7,
 					"minWeeklyHeadroom": 0.1
 				},
 				{
@@ -392,12 +393,19 @@
 					"minWeeklyHeadroom": 0
 				},
 				{
+					"model": "google-antigravity/gemini-4-argon",
+					"effort": "low",
+					"difficulties": [
+						"ordinary"
+					],
+					"minWeeklyHeadroom": 0
+				},
+				{
 					"model": "@frontier-1",
 					"effort": "medium",
 					"difficulties": [
 						"hard"
 					],
-					"maxShortUsed": 0.7,
 					"minWeeklyHeadroom": 0.1
 				},
 				{
@@ -417,12 +425,19 @@
 					"minWeeklyHeadroom": 0
 				},
 				{
+					"model": "google-antigravity/gemini-4-argon",
+					"effort": "medium",
+					"difficulties": [
+						"hard"
+					],
+					"minWeeklyHeadroom": 0
+				},
+				{
 					"model": "@frontier-1",
 					"effort": "high",
 					"difficulties": [
 						"critical"
 					],
-					"maxShortUsed": 0.7,
 					"minWeeklyHeadroom": 0.1
 				},
 				{
@@ -436,6 +451,14 @@
 				{
 					"model": "openai-codex/gpt-6.1-sol",
 					"effort": "medium",
+					"difficulties": [
+						"critical"
+					],
+					"minWeeklyHeadroom": 0
+				},
+				{
+					"model": "google-antigravity/gemini-4-argon",
+					"effort": "high",
 					"difficulties": [
 						"critical"
 					],
@@ -455,7 +478,6 @@
 					"difficulties": [
 						"exact"
 					],
-					"maxShortUsed": 0.7,
 					"minWeeklyHeadroom": 0.1
 				},
 				{
@@ -468,6 +490,14 @@
 				},
 				{
 					"model": "openai-codex/gpt-6.1-sol",
+					"effort": "low",
+					"difficulties": [
+						"exact"
+					],
+					"minWeeklyHeadroom": 0
+				},
+				{
+					"model": "google-antigravity/gemini-4-argon",
 					"effort": "low",
 					"difficulties": [
 						"exact"
@@ -480,7 +510,6 @@
 					"difficulties": [
 						"ordinary"
 					],
-					"maxShortUsed": 0.7,
 					"minWeeklyHeadroom": 0.1
 				},
 				{
@@ -500,12 +529,19 @@
 					"minWeeklyHeadroom": 0
 				},
 				{
+					"model": "google-antigravity/gemini-4-argon",
+					"effort": "medium",
+					"difficulties": [
+						"ordinary"
+					],
+					"minWeeklyHeadroom": 0
+				},
+				{
 					"model": "@frontier-1",
 					"effort": "medium",
 					"difficulties": [
 						"hard"
 					],
-					"maxShortUsed": 0.7,
 					"minWeeklyHeadroom": 0.1
 				},
 				{
@@ -518,6 +554,14 @@
 				},
 				{
 					"model": "openai-codex/gpt-6.1-sol",
+					"effort": "high",
+					"difficulties": [
+						"hard"
+					],
+					"minWeeklyHeadroom": 0
+				},
+				{
+					"model": "google-antigravity/gemini-4-argon",
 					"effort": "high",
 					"difficulties": [
 						"hard"
@@ -530,7 +574,6 @@
 					"difficulties": [
 						"critical"
 					],
-					"maxShortUsed": 0.7,
 					"minWeeklyHeadroom": 0.1
 				},
 				{
@@ -544,6 +587,14 @@
 				{
 					"model": "openai-codex/gpt-6.1-sol",
 					"effort": "xhigh",
+					"difficulties": [
+						"critical"
+					],
+					"minWeeklyHeadroom": 0
+				},
+				{
+					"model": "google-antigravity/gemini-4-argon",
+					"effort": "high",
 					"difficulties": [
 						"critical"
 					],
@@ -559,7 +610,6 @@
 			"members": [
 				{
 					"model": "@frontier-1",
-					"maxShortUsed": 0.7,
 					"minWeeklyHeadroom": 0.1
 				},
 				{
@@ -571,6 +621,10 @@
 					"model": "@frontier-3",
 					"effortFrom": "@frontier-1",
 					"effortStep": 1,
+					"minWeeklyHeadroom": 0
+				},
+				{
+					"model": "google-antigravity/gemini-4-argon",
 					"minWeeklyHeadroom": 0
 				}
 			],

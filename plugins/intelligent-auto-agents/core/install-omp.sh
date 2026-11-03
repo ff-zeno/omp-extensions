@@ -142,7 +142,9 @@ else
   exit 1
 fi
 
-bun --cwd="$SOURCE" install --frozen-lockfile
+# CI=true (exported by agent shells such as omp's bash tool) turns upstream's prepare
+# step into a check of committed generated assets, which a local build need not match.
+env -u CI bun --cwd="$SOURCE" install --frozen-lockfile
 
 # The produced binary embeds every addon in packages/natives/native/ and refuses one
 # stamped for another release, so supply the matching prebuilt for this version.

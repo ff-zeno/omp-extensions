@@ -144,7 +144,6 @@ The patch also carries one change unrelated to routing, for the `throughput` plu
 Stock OMP records each running subagent's completion self-estimate (the `task.completionProbe` setting) on its async job, but `ctx.getAsyncJobSnapshot()` does not return it, so extensions cannot show it.
 
 - `packages/coding-agent/src/async/job-manager.ts` adds `taskJobProgressRecord` and `taskJobCompletionPercent`.
-- `packages/coding-agent/src/async/job-control.ts` uses those helpers in `snapshotJobs` instead of its inline progress lookup, with no change in behavior.
 - `packages/coding-agent/src/session/agent-session-types.ts` adds optional `completionPercent` to `AsyncJobSnapshotItem`.
 - `packages/coding-agent/src/session/agent-session.ts` fills `completionPercent` for running jobs in `getAsyncJobSnapshot`.
 - `test/agent-session-async-delivery.test.ts` checks that the snapshot returns the job's own estimate when a batch reports several.

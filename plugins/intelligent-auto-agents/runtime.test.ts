@@ -93,6 +93,7 @@ const SOL = model("gpt-6.1-sol", ["low", "medium", "high", "xhigh", "max"], "ope
 const LUNA = model("gpt-5.6-luna", ["low", "medium", "high", "xhigh", "max"], "openai-codex");
 const HAIKU = model("claude-haiku-5-5", ["low", "medium", "high", "xhigh", "max"], "anthropic");
 const GEMINI = model("gemini-3.8-flash", ["low", "medium", "high"], "google-antigravity");
+const ARGON = model("gemini-4-argon", ["low", "medium", "high"], "google-antigravity");
 const DEFAULT_BINDINGS: Record<string, RoutingTestModel> = {
 	"@frontier-1": OPUS,
 	"@frontier-2": SOL,
@@ -106,6 +107,7 @@ const DEFAULT_BINDINGS: Record<string, RoutingTestModel> = {
 	"xai-oauth/grok-4.6": GROK,
 	"openai-codex/gpt-6.1-sol": SOL,
 	"openai-codex/gpt-5.6-luna": LUNA,
+	"google-antigravity/gemini-4-argon": ARGON,
 };
 
 interface Fixture {
@@ -235,8 +237,9 @@ function usageReport(provider: string, modelId: string, fetchedAt = Date.now(), 
 		window: { id, label: id, durationMs, resetsAt: fetchedAt + durationMs * (1 - elapsed) },
 		amount: { unit: "percent", usedFraction: value },
 	});
+	// Anthropic reports only shared weekly windows: the 5-hour window was removed.
 	if (provider === "anthropic")
-		return { provider, fetchedAt, limits: [limit("anthropic:5h", shortDuration, used, 0.2, true), limit("anthropic:7d", weeklyDuration, weeklyUsed, 0.2, true)] };
+		return { provider, fetchedAt, limits: [limit("anthropic:7d", weeklyDuration, weeklyUsed, 0.2, true), limit("anthropic:7d:fable", weeklyDuration, 0, 0.2, true)] };
 	if (provider === "xai-oauth")
 		return { provider, fetchedAt, limits: [limit("xai-oauth:credits:weekly", weeklyDuration, used, 0.2), limit("xai-oauth:credits:monthly", 30 * 24 * 60 * 60 * 1000, used, 0.2)] };
 	return { provider, fetchedAt, limits: [limit(`${provider}:${modelId}:5h`, shortDuration, used, 0.2), limit(`${provider}:${modelId}:weekly`, weeklyDuration, used, 0.2)] };
@@ -257,6 +260,9 @@ function usage(provider: string, used = 0.1, fetchedAt = Date.now()): Record<str
 	return { provider, fetchedAt, limits: [limit("openai-codex:5h", shortDuration), limit("openai-codex:7d", weeklyDuration)] };
 }
 const ON_PACE = [usage("anthropic"), usage("xai-oauth"), usage("openai-codex")];
+const argonUsage = (used = 0.1) => usageReport("google-antigravity", "gemini-4-argon", Date.now(), used);
+/** Argon over skipAt, for tests about the frontier roles rather than Argon's slot. */
+const ARGON_OUT = argonUsage(0.99);
 
 const personaRegistry = () =>
 	(globalThis as Record<symbol, Map<string, { persona: string }> | undefined>)[Symbol.for("omp.persona-suggestions.v1")];
@@ -306,12 +312,12 @@ describe("intelligent auto-agents runtime", () => {
 	test("routes a covered agent through its task-type pool without persisting task text", async () => {
 		reset();
 		routeChoice = "code";
-		const fixture = createFixture({ usageReports: ON_PACE });
+		const fixture = createFixture({ usageReports: [...ON_PACE, argonUsage()] });
 
 		const result = await spawn(fixture);
 
 		expect(result).toMatchObject({ thinkingLevel: "low" });
-		expect(result.model).toEqual(["anthropic/claude-sonnet-5-5", "xai-oauth/grok-4.6:high", "openai-codex/gpt-5.6-luna:max"]);
+		expect(result.model).toEqual(["anthropic/claude-sonnet-5-5", "xai-oauth/grok-4.6:high", "openai-codex/gpt-5.6-luna:max", "google-antigravity/gemini-4-argon:low"]);
 		const data = decisionData(fixture);
 		expect(data).toMatchObject({ slot: "code", difficulty: "ordinary" });
 		expect(data.pool).toMatchObject({ active: "anthropic/claude-sonnet-5-5" });
@@ -319,18 +325,21 @@ describe("intelligent auto-agents runtime", () => {
 		expect(judgeRequests[0].state).toContain("Routing guidance:");
 	});
 
-	for (const [taskType, agent, difficulty, level, primaryEffort, grokEffort] of [
-		["lead", "task", "hard", 2, "high", "xhigh"],
-		["lead", "task", "critical", 3, "xhigh", "xhigh"],
-		["plan", "plan", "ordinary", 1, "medium", "high"],
-		["security-review", "security-reviewer", "critical", 3, "xhigh", "xhigh"],
+	// Argon is unpinned in the lead pool: its map (low/medium/high/high) clamped to the task type's range.
+	for (const [taskType, agent, difficulty, level, primaryEffort, grokEffort, argonEffort] of [
+		["lead", "task", "hard", 2, "high", "xhigh", "high"],
+		["lead", "task", "critical", 3, "xhigh", "xhigh", "high"],
+		["plan", "plan", "exact", 0, "medium", "high", "medium"],
+		["plan", "plan", "ordinary", 1, "medium", "high", "medium"],
+		["plan", "plan", "hard", 2, "high", "xhigh", "high"],
+		["security-review", "security-reviewer", "critical", 3, "xhigh", "xhigh", "high"],
 	] as const) {
-		for (const [condition, shortUsed, weeklyUsed, codexUsed, stage] of [
-			["healthy", 0.69, 0.05, 0.1, 0],
-			["short window at cap", 0.7, 0.05, 0.1, 1],
-			["short window above cap", 0.71, 0.05, 0.1, 1],
-			["weekly headroom below minimum", 0.1, 0.11, 0.1, 1],
-			["Anthropic and OpenAI gated", 0.7, 0.05, 0.99, 2],
+		for (const [condition, weeklyUsed, codexUsed, xaiUsed, stage] of [
+			["healthy", 0.05, 0.1, 0.1, 0],
+			["weekly headroom at minimum", 0.1, 0.1, 0.1, 0],
+			["weekly headroom below minimum", 0.11, 0.1, 0.1, 1],
+			["Anthropic and OpenAI gated", 0.11, 0.99, 0.1, 2],
+			["Anthropic, OpenAI, and xAI gated", 0.11, 0.99, 0.99, 3],
 		] as const) {
 			test(`${taskType} ${difficulty} routes with ${condition}`, async () => {
 				reset();
@@ -339,19 +348,24 @@ describe("intelligent auto-agents runtime", () => {
 				difficultyScore = level;
 				const fixture = createFixture({
 					usageReports: [
-						usageReport("anthropic", "", Date.now(), shortUsed, weeklyUsed),
+						usageReport("anthropic", "", Date.now(), weeklyUsed, weeklyUsed),
 						usage("openai-codex", codexUsed),
-						usage("xai-oauth"),
+						usage("xai-oauth", xaiUsed),
+						argonUsage(),
 					],
 				});
 				const result = await spawn(fixture, { agent });
 				const opus = "anthropic/claude-opus-5-5";
 				const sol = "openai-codex/gpt-6.1-sol";
 				const grok = "xai-oauth/grok-4.6";
-				expect(result.thinkingLevel).toBe(stage === 2 ? grokEffort : primaryEffort);
-				expect(result.model).toEqual(stage === 0
-					? [opus, `${sol}:${primaryEffort}`, `${grok}:${grokEffort}`]
-					: stage === 1 ? [sol, `${grok}:${grokEffort}`] : [grok]);
+				const argon = "google-antigravity/gemini-4-argon";
+				expect(result.thinkingLevel).toBe(stage === 3 ? argonEffort : stage === 2 ? grokEffort : primaryEffort);
+				expect(result.model).toEqual(
+					stage === 0 ? [opus, `${sol}:${primaryEffort}`, `${grok}:${grokEffort}`, `${argon}:${argonEffort}`]
+					: stage === 1 ? [sol, `${grok}:${grokEffort}`, `${argon}:${argonEffort}`]
+					: stage === 2 ? [grok, `${argon}:${argonEffort}`]
+					: [argon],
+				);
 			});
 		}
 	}
@@ -363,7 +377,7 @@ describe("intelligent auto-agents runtime", () => {
 		difficultyScore = 1;
 		const fixture = createFixture({
 			bindings: { ...DEFAULT_BINDINGS, "@frontier-2": GROK, "@frontier-3": SOL },
-			usageReports: [usage("anthropic", 0.99), usage("xai-oauth"), usage("openai-codex", 0.99)],
+			usageReports: [usage("anthropic", 0.99), usage("xai-oauth"), usage("openai-codex", 0.99), ARGON_OUT],
 		});
 		expect(await spawn(fixture, { agent: "plan" })).toMatchObject({
 			model: ["xai-oauth/grok-4.6"], thinkingLevel: "medium",
@@ -374,7 +388,7 @@ describe("intelligent auto-agents runtime", () => {
 		difficultyScore = 3;
 		const capped = createFixture({
 			bindings: { ...DEFAULT_BINDINGS, "@frontier-2": GROK, "@frontier-3": SOL },
-			usageReports: [usage("anthropic", 0.99), usage("xai-oauth", 0.99), usage("openai-codex")],
+			usageReports: [usage("anthropic", 0.99), usage("xai-oauth", 0.99), usage("openai-codex"), ARGON_OUT],
 		});
 		// Sol supports max, but the third frontier's uplift must still stop at the task ceiling.
 		expect(await spawn(capped)).toMatchObject({
@@ -388,7 +402,7 @@ describe("intelligent auto-agents runtime", () => {
 		difficultyScore = 2;
 		const fixture = createFixture({
 			bindings: { ...DEFAULT_BINDINGS, "@frontier-1": DEFAULT_BINDINGS["anthropic/claude-sonnet-5-5"] },
-			usageReports: [usage("anthropic", 0.99), usage("openai-codex"), usage("xai-oauth")],
+			usageReports: [usage("anthropic", 0.99), usage("openai-codex"), usage("xai-oauth"), ARGON_OUT],
 		});
 		expect(await spawn(fixture)).toMatchObject({
 			model: ["openai-codex/gpt-6.1-sol", "xai-oauth/grok-4.6:medium"], thinkingLevel: "low",
@@ -402,7 +416,7 @@ describe("intelligent auto-agents runtime", () => {
 		difficultyScore = 1;
 		const fixture = createFixture({
 			bindings: { ...DEFAULT_BINDINGS, "@frontier-3": model("grok-rebound", ["low", "medium", "high", "xhigh"], "xai-oauth") },
-			usageReports: [usage("anthropic", 0.99), usage("openai-codex", 0.99), usage("xai-oauth")],
+			usageReports: [usage("anthropic", 0.99), usage("openai-codex", 0.99), usage("xai-oauth"), ARGON_OUT],
 		});
 		expect(await spawn(fixture, { agent: "plan" })).toMatchObject({
 			model: ["xai-oauth/grok-rebound"], thinkingLevel: "high",
@@ -415,7 +429,7 @@ describe("intelligent auto-agents runtime", () => {
 		difficultyScore = 2;
 		const bindings = { ...DEFAULT_BINDINGS };
 		delete bindings["@frontier-1"];
-		const fixture = createFixture({ bindings, usageReports: ON_PACE });
+		const fixture = createFixture({ bindings, usageReports: [...ON_PACE, ARGON_OUT] });
 		expect(await spawn(fixture)).toMatchObject({
 			model: ["openai-codex/gpt-6.1-sol"], thinkingLevel: "xhigh",
 		});
@@ -427,7 +441,7 @@ describe("intelligent auto-agents runtime", () => {
 		difficultyScore = 0;
 		const fixture = createFixture({
 			bindings: { ...DEFAULT_BINDINGS, "@frontier-2": model("fallback-rebound", ["high", "xhigh"], "openai-codex") },
-			usageReports: [usage("anthropic", 0.99), usage("openai-codex", 0.99), usage("xai-oauth", 0.99)],
+			usageReports: [usage("anthropic", 0.99), usage("openai-codex", 0.99), usage("xai-oauth", 0.99), ARGON_OUT],
 		});
 		expect(await spawn(fixture)).toMatchObject({ model: ["openai-codex/fallback-rebound"], thinkingLevel: "xhigh" });
 	});
@@ -437,11 +451,11 @@ describe("intelligent auto-agents runtime", () => {
 		routeChoice = "lead";
 		difficultyScore = 3;
 		const fixture = createFixture({
-			usageReports: ON_PACE,
+			usageReports: [...ON_PACE, argonUsage()],
 			suppressedSelectors: ["anthropic/claude-opus-5-5:xhigh"],
 		});
 		expect(await spawn(fixture)).toMatchObject({
-			model: ["openai-codex/gpt-6.1-sol", "xai-oauth/grok-4.6:xhigh"],
+			model: ["openai-codex/gpt-6.1-sol", "xai-oauth/grok-4.6:xhigh", "google-antigravity/gemini-4-argon:high"],
 			thinkingLevel: "xhigh",
 		});
 		expect(decisionData(fixture).rollover).toEqual({
@@ -472,17 +486,74 @@ describe("intelligent auto-agents runtime", () => {
 		difficultyScore = 2;
 		routeChoice = "code";
 		const hard = await spawn(createFixture({ usageReports: [usage("anthropic", 0.99), usage("xai-oauth", 0.99), usage("openai-codex")] }));
-		expect(hard).toMatchObject({ model: ["openai-codex/gpt-6.1-sol"], thinkingLevel: "low" });
+		expect(hard).toMatchObject({ model: ["openai-codex/gpt-6.1-sol", "google-antigravity/gemini-4-argon:medium"], thinkingLevel: "low" });
+
+		reset();
+		difficultyScore = 2;
+		routeChoice = "code";
+		// Anthropic, xAI, and OpenAI all out: hard code rolls to Gemini 4 Argon medium, matching Opus.
+		const threeOut = [usage("anthropic", 0.99), usage("xai-oauth", 0.99), usage("openai-codex", 0.99)];
+		const argonHard = await spawn(createFixture({ usageReports: [...threeOut, usageReport("google-antigravity", "gemini-4-argon")] }));
+		expect(argonHard).toMatchObject({ model: ["google-antigravity/gemini-4-argon"], thinkingLevel: "medium" });
+
+		reset();
+		difficultyScore = 3;
+		routeChoice = "code";
+		const argonCritical = await spawn(createFixture({ usageReports: [...threeOut, usageReport("google-antigravity", "gemini-4-argon")] }));
+		expect(argonCritical).toMatchObject({ model: ["google-antigravity/gemini-4-argon"], thinkingLevel: "high" });
 
 		reset();
 		difficultyScore = 2;
 		routeChoice = "code";
 		// Every provider exhausted: the code pool fallback is Sol low, ungated.
 		const allOut = await spawn(
-			createFixture({ usageReports: [usage("anthropic", 0.99), usage("xai-oauth", 0.99), usage("openai-codex", 0.99)] }),
+			createFixture({ usageReports: [...threeOut, usageReport("google-antigravity", "gemini-4-argon", Date.now(), 0.99)] }),
 		);
 		expect(allOut).toMatchObject({ model: ["openai-codex/gpt-6.1-sol"], thinkingLevel: "low" });
 	});
+
+	test("hard code keeps Opus first on pace and reaches Argon once Anthropic, xAI, and OpenAI are over weekly pace", async () => {
+		reset();
+		difficultyScore = 2;
+		routeChoice = "code";
+		const onPace = await spawn(createFixture({ usageReports: [...ON_PACE, argonUsage()] }));
+		expect(onPace).toMatchObject({
+			model: ["anthropic/claude-opus-5-5", "xai-oauth/grok-4.6:high", "openai-codex/gpt-6.1-sol:low", "google-antigravity/gemini-4-argon:medium"],
+			thinkingLevel: "medium",
+		});
+
+		reset();
+		difficultyScore = 2;
+		routeChoice = "code";
+		// 50% used with 20% of the week elapsed: over pace, but far from exhausted or skipAt.
+		const overPace = [usage("anthropic", 0.5), usage("xai-oauth", 0.5), usage("openai-codex", 0.5)];
+		const fixture = createFixture({ usageReports: [...overPace, argonUsage()] });
+		expect(await spawn(fixture)).toMatchObject({ model: ["google-antigravity/gemini-4-argon"], thinkingLevel: "medium" });
+		expect(decisionData(fixture).pool).toMatchObject({ active: "google-antigravity/gemini-4-argon" });
+	});
+
+	for (const [difficulty, level, solEffort, argonEffort] of [
+		["exact", 0, "low", "low"],
+		["ordinary", 1, "medium", "medium"],
+		["hard", 2, "high", "high"],
+		["critical", 3, "xhigh", "high"],
+	] as const) {
+		test(`${difficulty} review tries Argon after Sol and picks it when the others are over weekly pace`, async () => {
+			reset();
+			difficultyScore = level;
+			routeChoice = "review";
+			const onPace = await spawn(createFixture({ usageReports: [...ON_PACE, argonUsage()] }), { agent: "reviewer" });
+			expect(onPace.model.slice(-2)).toEqual([`openai-codex/gpt-6.1-sol:${solEffort}`, `google-antigravity/gemini-4-argon:${argonEffort}`]);
+
+			reset();
+			difficultyScore = level;
+			routeChoice = "review";
+			const overPace = [usage("anthropic", 0.5), usage("xai-oauth", 0.5), usage("openai-codex", 0.5), argonUsage()];
+			expect(await spawn(createFixture({ usageReports: overPace }), { agent: "reviewer" })).toMatchObject({
+				model: ["google-antigravity/gemini-4-argon"], thinkingLevel: argonEffort,
+			});
+		});
+	}
 
 	test("a git spawn routes through the commit pool without a task-type question", async () => {
 		reset();

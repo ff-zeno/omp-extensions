@@ -90,7 +90,6 @@ describe("catalog v9", () => {
 		expect(catalog.nuances.length).toBeGreaterThan(0);
 		expect(catalog.planningReadiness.agents).toEqual(["plan"]);
 		expect(catalog.models["anthropic/claude-sonnet-5-5"].maxEffort).toBe("low");
-		expect(catalog.poolLimits.burstPenaltyWindow["*"]).toBe("short");
 		expect(catalog.blockedDirectiveTargets).toEqual(["luna", "astra"]);
 		expect(catalog.jevInstructions.route.length).toBeGreaterThan(0);
 	});
@@ -444,9 +443,9 @@ describe("pool ranking", () => {
 		const target = member(provider, "model", { maxShortUsed: 0.9, minWeeklyHeadroom: 0, penaltyKind: undefined });
 		const penalties = new Map([[`${provider}/model`, 0.02]]);
 		const usage = { reports: [report(provider, 0.79)] as never, credentialCounts: {} };
-		const base = structuredClone(catalog.poolLimits);
+		const base = { ...structuredClone(catalog.poolLimits), burstPenaltyWindow: { "*": "short" as const } };
 
-		// No entry for the provider, so the `*` default (short) receives the penalty.
+		// No entry for the provider, so the `*` default (short here) receives the penalty.
 		const fallbackUsed = rankPool([target], usage, penalties, [], base, Date.now()).verdicts[`${provider}/model`]?.used;
 		expect(fallbackUsed?.short).toBeCloseTo(0.81, 5);
 		expect(fallbackUsed?.weekly).toBeCloseTo(0.79, 5);

@@ -96,7 +96,7 @@ Jev rates difficulty as Exact, Ordinary, Hard, or Critical according to the cata
 A pool member scoped with `difficulties` serves only those levels.
 The `mechanical`, `commit`, `code`, and `review` pools list one member per provider per difficulty, tried Anthropic, then xAI, then OpenAI, because Haiku, Sonnet, and Opus share one Anthropic quota, so rolling over inside a provider buys nothing.
 The `mechanical`, `commit`, `code`, and `review` pools fall back to `openai-codex/gpt-6.1-sol` low when every member is quota-skipped.
-The `lead`, `plan`, and `security-review` task types share the role-only `lead` pool: `@frontier-1` → `@frontier-2` → `@frontier-3`. Anthropic uses the same quota gates as other worker pools; the other members use weekly headroom 0. Opus keeps its model-map effort, clamped to high–xhigh for lead/security review and medium–xhigh for planning. Both rollover members set `effortFrom: "@frontier-1"`; frontier-2 matches that effort, while frontier-3 sets `effortStep: 1` for one level higher, capped at xhigh. Members do not pin effort. Remaining eligible members stay in the provider-failure retry chain. The all-skipped fallback is `@frontier-2:xhigh`.
+The `lead`, `plan`, and `security-review` task types share the `lead` pool: `@frontier-1` → `@frontier-2` → `@frontier-3` → `google-antigravity/gemini-4-argon`. Anthropic uses the same quota gates as other worker pools; the other members use weekly headroom 0. Opus keeps its model-map effort, clamped to high–xhigh for lead/security review and medium–xhigh for planning. Both frontier rollover members set `effortFrom: "@frontier-1"`; frontier-2 matches that effort, while frontier-3 sets `effortStep: 1` for one level higher, capped at xhigh. Argon uses its own map (low, medium, high, high) under the same clamp. Members do not pin effort. Remaining eligible members stay in the provider-failure retry chain. The all-skipped fallback is `@frontier-2:xhigh`.
 
 | Pool | Difficulty | Anthropic | xAI (Grok) | OpenAI |
 |---|---|---|---|---|
@@ -117,11 +117,14 @@ The `lead`, `plan`, and `security-review` task types share the role-only `lead` 
 | `review` | hard | Opus medium | Grok high | Sol high |
 | `review` | critical | Opus high | Grok xhigh | Sol xhigh |
 
+Gemini 4 Argon (`google-antigravity/gemini-4-argon`) is the last member, as frontier rollover: in `code` after Luna for ordinary (low) and after Sol for hard (medium) and critical (high); in `review` after Sol at every difficulty (low, medium, high, high); and in the `lead` pool (lead, plan, security-review) after Grok, where plan runs it at medium for exact and ordinary and high above, and lead and security review at high.
+
 Sonnet is named literally with no role and never runs above low.
-Anthropic members are eligible while the 5-hour window is under 70% used (`maxShortUsed` 0.7) and weekly headroom is at least 0.10 (`minWeeklyHeadroom` 0.1).
+Anthropic members are eligible while weekly headroom is at least 0.10 (`minWeeklyHeadroom` 0.1); Anthropic no longer reports a 5-hour window, so no member has a 5-hour gate.
 xAI (`@frontier-3`, Grok) and OpenAI (`openai-codex/gpt-5.6-luna` in mechanical and commit, `openai-codex/gpt-6.1-sol` in code and review) share one gate: `minWeeklyHeadroom` 0, so they are eligible while weekly usage is not ahead of the weekly pace.
-Neither has a monthly gate or a short-window gate; both providers report only a 7-day window.
-OpenAI's in-flight burst penalty counts against its weekly window, like xAI.
+Neither has a monthly gate; both report only a 7-day window.
+Every provider's in-flight burst penalty counts against its weekly window.
+Argon's gate is also `minWeeklyHeadroom` 0, read from Antigravity's `google` counter, which holds Argon's own weekly bucket and the Gemini weekly window that Gemini 3.8 Flash also spends; the worse of the two decides, so heavy Flash use can skip Argon. Gemini's 5-hour window is not gated.
 A gated member with no usage report, or a report that lacks a valid gated window, gets `no-usage` and is ranked last after crowded members; stale and partial reports still exclude.
 A window at or above `demoteAt` 0.8 crowds a member; at or above `skipAt` 0.95, or exhausted, it is skipped.
 Within 12 hours of a weekly reset, weekly crowding is lifted; within 5 hours, the weekly pace check and weekly `skipAt` are lifted (weekly exhaustion still stops new work), and Anthropic's short-window cap rises from 0.7 to `demoteAt` 0.8.
