@@ -124,7 +124,7 @@ Anthropic members are eligible while weekly headroom is at least 0.10 (`minWeekl
 xAI (`@frontier-3`, Grok) and OpenAI (`openai-codex/gpt-5.6-luna` in mechanical and commit, `openai-codex/gpt-6.1-sol` in code and review) share one gate: `minWeeklyHeadroom` 0, so they are eligible while weekly usage is not ahead of the weekly pace.
 Neither has a monthly gate; both report only a 7-day window.
 Every provider's in-flight burst penalty counts against its weekly window.
-Argon's gate is also `minWeeklyHeadroom` 0, read from Antigravity's `google` counter, which holds Argon's own weekly bucket and the Gemini weekly window that Gemini 3.8 Flash also spends; the worse of the two decides, so heavy Flash use can skip Argon. Gemini's 5-hour window is not gated.
+Argon's gate is also `minWeeklyHeadroom` 0, read only from its own `gemini-argon-*` weekly bucket in Antigravity's report; the shared Gemini windows that Gemini 3.8 Flash spends do not gate Argon, and Argon's bucket does not gate other Gemini models. Gemini's 5-hour window is not gated.
 A gated member with no usage report, or a report that lacks a valid gated window, gets `no-usage` and is ranked last after crowded members; stale and partial reports still exclude.
 A window at or above `demoteAt` 0.8 crowds a member; at or above `skipAt` 0.95, or exhausted, it is skipped.
 Within 12 hours of a weekly reset, weekly crowding is lifted; within 5 hours, the weekly pace check and weekly `skipAt` are lifted (weekly exhaustion still stops new work), and Anthropic's short-window cap rises from 0.7 to `demoteAt` 0.8.

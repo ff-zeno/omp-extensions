@@ -767,6 +767,14 @@ export function windowSamples(report: UsageReport, modelId?: string): WindowSamp
 	let limits: readonly UsageLimit[] = report.limits;
 	if (report.provider === "google-antigravity") {
 		limits = scopeAntigravityLimitsForModel(report, modelId ? { modelId } : undefined);
+		// Argon draws only on its own `gemini-argon-*` bucket, which upstream files
+		// under the shared Google counter; no other Gemini model draws on it.
+		const argonBucket = limits.filter(limit => limit.id.toLowerCase().includes(":gemini-argon-"));
+		if (modelId?.toLowerCase().includes("argon")) {
+			if (argonBucket.length > 0) limits = argonBucket;
+		} else {
+			limits = limits.filter(limit => !argonBucket.includes(limit));
+		}
 	} else if (report.provider === "xai-oauth") {
 		limits = report.limits.filter(limit => limit.id.startsWith("xai-oauth:credits:"));
 	} else if (report.provider === "anthropic") {

@@ -438,6 +438,44 @@ describe("pool ranking", () => {
 		expect(samples.every(sample => sample.usedFraction === 0.2)).toBe(true);
 	});
 
+	test("gates Argon on its own Antigravity bucket and other Gemini models on the shared ones", () => {
+		const provider = "google-antigravity";
+		const weekly = 7 * 24 * 60 * 60 * 1000;
+		const now = Date.now();
+		const limit = (bucket: string, durationMs: number, usedFraction: number) => ({
+			id: `${provider}:google:default:${bucket}`,
+			label: bucket,
+			scope: { provider },
+			window: { id: bucket, label: bucket, durationMs, resetsAt: now + durationMs * 0.8 },
+			amount: { unit: "percent", usedFraction },
+			status: usedFraction >= 1 ? "exhausted" : "ok",
+		});
+		const status = (argonUsed: number, geminiUsed: number) => {
+			const members = [
+				member(provider, "gemini-4-argon", { minWeeklyHeadroom: 0 }),
+				member(provider, "gemini-3.1-pro-high", { minWeeklyHeadroom: 0 }),
+			];
+			const usage = {
+				reports: [
+					{
+						provider,
+						fetchedAt: now,
+						limits: [
+							limit("gemini-argon-wtu-weekly", weekly, argonUsed),
+							limit("gemini-weekly", weekly, geminiUsed),
+							limit("gemini-5h", 5 * 60 * 60 * 1000, geminiUsed),
+						],
+					},
+				] as never,
+				credentialCounts: {},
+			};
+			const { verdicts } = rankPool(members, usage, new Map(), [], catalog.poolLimits, now);
+			return [verdicts[`${provider}/gemini-4-argon`]?.status, verdicts[`${provider}/gemini-3.1-pro-high`]?.status];
+		};
+		expect(status(1, 0.1)).toEqual(["skipped", "eligible"]);
+		expect(status(0.1, 1)).toEqual(["eligible", "skipped"]);
+	});
+
 	test("picks the burst-penalty window from the catalog", () => {
 		const provider = "acme";
 		const target = member(provider, "model", { maxShortUsed: 0.9, minWeeklyHeadroom: 0, penaltyKind: undefined });
