@@ -169,7 +169,7 @@ Jev evaluates routing requests through TypeSafe.
 Authenticate with `/login typesafe` or set `TYPESAFE_API_KEY`.
 Without a TypeSafe key, Jev records a baseline decision and keeps the configured model and effort.
 Jev failures, low confidence, routing disabled, locked requests, and unresolvable pools also keep the baseline configuration.
-Quota is not a global dispatch cap: `plan-review` members are ungated, missing usage can still select Anthropic, and a failed usage fetch preserves pool order. Fixed `vision` keeps its provider-failure `@lead` backup without quota checks; directives and pinned agents also intentionally bypass pool gates. All-skipped worker fallbacks do not recheck quota.
+Quota is not a global dispatch cap: `plan-review` members are ungated, missing usage can still select Anthropic, and a failed usage fetch preserves pool order. Fixed `vision` keeps its provider-failure `@lead` backup without quota checks; directives and pinned agents also intentionally bypass pool gates. All-skipped worker fallbacks do not recheck quota. `poolLimits.ignoreQuota` names providers that skip usage ranking; the shipped catalog ignores `openai-codex`. Catalog.json is re-read on each spawn when its mtime changes.
 
 ## Visibility
 

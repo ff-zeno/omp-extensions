@@ -104,6 +104,11 @@ export type PoolLimits = {
 	demoteForMs: number;
 	/** Which window a provider's in-flight burst penalty counts against; `*` is the default. */
 	burstPenaltyWindow: Record<string, WindowKind>;
+	/**
+	 * Provider ids whose members skip usage ranking (stale, skipAt, pace, crowding, exhaustion).
+	 * Failure demotion still applies. Absent or empty means every provider is gated as usual.
+	 */
+	ignoreQuota?: readonly string[];
 };
 
 export type Catalog = {
@@ -329,6 +334,9 @@ function poolLimits(value: unknown): value is PoolLimits {
 	if (!Object.entries(value.burstPenaltyWindow).every(([provider, kind]) => text(provider) && isWindowKind(kind)))
 		return false;
 	if (!isWindowKind(value.burstPenaltyWindow["*"])) return false;
+	if (value.ignoreQuota !== undefined) {
+		if (!Array.isArray(value.ignoreQuota) || !value.ignoreQuota.every(text) || !unique(value.ignoreQuota)) return false;
+	}
 	return (
 		unit(value.demoteAt) &&
 		unit(value.skipAt) &&
@@ -544,6 +552,38 @@ export function parseCatalog(value: unknown): Catalog {
 		},
 		blockedDirectiveTargets: value.blockedDirectiveTargets,
 		directiveTargets: directives,
+	};
+}
+
+export type CatalogReloader = { get: () => Catalog };
+
+/**
+ * Re-parse a catalog when the source mtime changes.
+ * Invalid JSON or catalog keeps the last valid value and retries on the next get.
+ */
+export function createCatalogReloader(
+	io: { mtimeMs: () => number | undefined; text: () => string },
+	initial: Catalog,
+): CatalogReloader {
+	let catalog = initial;
+	let loadedMtime: number | undefined;
+	return {
+		get() {
+			let mtime: number | undefined;
+			try {
+				mtime = io.mtimeMs();
+			} catch {
+				return catalog;
+			}
+			if (mtime === undefined || mtime === loadedMtime) return catalog;
+			try {
+				catalog = parseCatalog(JSON.parse(io.text()) as unknown);
+				loadedMtime = mtime;
+			} catch {
+				// Keep the last valid catalog; do not pin mtime so the next get retries.
+			}
+			return catalog;
+		},
 	};
 }
 
@@ -855,11 +895,22 @@ export function rankPool(
 	const crowded: string[] = [];
 	const unmetered: string[] = [];
 	const verdicts: Record<string, PoolVerdict> = {};
+	const ignoredProviders = new Set(limits.ignoreQuota ?? []);
 	for (const member of members) {
 		const memberReports = reports.filter(report => report.provider === member.model.provider);
 		const basePenalty = penaltyValue(penalties, member);
 		const verdict: PoolVerdict = { status: "no-usage", penalty: basePenalty };
 		verdicts[member.id] = verdict;
+		if (ignoredProviders.has(member.model.provider)) {
+			if (memberIsDemoted(demoted, member)) {
+				verdict.status = "demoted";
+				telemetryDemoted.push(member.id);
+			} else {
+				verdict.status = "eligible";
+				order.push(member.id);
+			}
+			continue;
+		}
 		if (memberReports.some(report => !Number.isFinite(report.fetchedAt) || nowMs - report.fetchedAt > limits.maxReportAgeMs)) {
 			verdict.status = "stale";
 			continue;
@@ -997,6 +1048,7 @@ export function rankPool(
 	order.push(...crowded, ...unmetered);
 	return { order, skipped, demoted: telemetryDemoted, verdicts };
 }
+
 
 function choiceAnswer(answer: unknown, ids: readonly string[]): { choice: string; confidence: number } | undefined {
 	if (

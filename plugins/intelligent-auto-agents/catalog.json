@@ -173,7 +173,10 @@
 		"demoteForMs": 1800000,
 		"burstPenaltyWindow": {
 			"*": "weekly"
-		}
+		},
+		"ignoreQuota": [
+			"openai-codex"
+		]
 	},
 	"pools": {
 		"mechanical": {

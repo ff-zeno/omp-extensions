@@ -4,13 +4,15 @@ import { NativeJudge, scopeAntigravityLimitsForModel, type UsageReport } from "@
 import * as PiAi from "@oh-my-pi/pi-ai";
 import { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import { type ExtensionAPI, type ExtensionContext, getSupportedEfforts } from "@oh-my-pi/pi-coding-agent";
-import { readFileSync } from "node:fs";
+import { readFileSync, statSync } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { fileURLToPath } from "node:url";
 import catalogData from "./catalog.json";
 import {
 	capEffort,
 	choose,
+	createCatalogReloader,
 	type Decision,
 	type Difficulty,
 	DIFFICULTY_NAMES,
@@ -39,7 +41,21 @@ import {
 	type UsageSummary,
 } from "./routing";
 
-const catalog = parseCatalog(catalogData);
+const CATALOG_PATH = path.join(path.dirname(fileURLToPath(import.meta.url)), "catalog.json");
+const catalogReloader = createCatalogReloader(
+	{
+		mtimeMs: () => {
+			try {
+				return statSync(CATALOG_PATH).mtimeMs;
+			} catch {
+				return undefined;
+			}
+		},
+		text: () => readFileSync(CATALOG_PATH, "utf8"),
+	},
+	parseCatalog(catalogData),
+);
+let catalog = catalogReloader.get();
 const STATE_ENTRY = "intelligent-auto-agents-state";
 /**
  * Persona suggestions shared with the session-persona plugin through a process-wide registry keyed
@@ -546,10 +562,12 @@ function readPlanProvenance(ctx: ExtensionContext, brief: string): PlanProvenanc
 }
 
 export function register(pi: ExtensionAPI): void {
+	catalog = catalogReloader.get();
 	let enabled = catalog.enabled;
 	let lastLine: string | undefined;
 
 	function restore(ctx: ExtensionContext): void {
+		catalog = catalogReloader.get();
 		enabled = catalog.enabled;
 		lastLine = undefined;
 		for (const entry of ctx.sessionManager.getBranch()) {
@@ -689,6 +707,7 @@ export function register(pi: ExtensionAPI): void {
 	pi.registerCommand("auto-agents", {
 		description: "Show routing status or set on/off for this session; never changes the chat model",
 		handler: async (args, ctx) => {
+			catalog = catalogReloader.get();
 			const action = args.trim();
 			if (action === "on" || action === "off") {
 				enabled = action === "on";
@@ -706,6 +725,7 @@ export function register(pi: ExtensionAPI): void {
 	});
 
 	pi.on("before_subagent_spawn", async (event, ctx) => {
+		catalog = catalogReloader.get();
 		let readinessUsage: UsageSummary | undefined;
 		if (catalog.planningReadiness.agents.includes(event.agent) && ctx.agent.kind === "main") {
 			const { result: readiness, latencyMs } = await withJevActivity(ctx, "checking planning readiness", () =>

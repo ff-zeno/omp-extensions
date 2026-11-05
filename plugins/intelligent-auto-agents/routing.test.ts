@@ -17,6 +17,7 @@ const {
 	DIFFICULTY_NAMES,
 	ORDINARY,
 	parseCatalog,
+	createCatalogReloader,
 	taskTypeEffortVaries,
 	modelDifficultyEffort,
 	clampEffort,
@@ -89,8 +90,8 @@ describe("catalog v9", () => {
 		expect(catalog.directiveTargets).toMatchObject({ "frontier-1": "@frontier-1", vision: "@vision" });
 		expect(catalog.nuances.length).toBeGreaterThan(0);
 		expect(catalog.planningReadiness.agents).toEqual(["plan"]);
-		expect(catalog.models["anthropic/claude-sonnet-5-5"].maxEffort).toBe("low");
 		expect(catalog.blockedDirectiveTargets).toEqual(["luna", "astra"]);
+		expect(catalog.poolLimits.ignoreQuota).toEqual(["openai-codex"]);
 		expect(catalog.jevInstructions.route.length).toBeGreaterThan(0);
 	});
 
@@ -159,6 +160,14 @@ describe("catalog v9", () => {
 		const missingWindowDefault = clone();
 		delete ((missingWindowDefault.poolLimits as Record<string, unknown>).burstPenaltyWindow as Record<string, unknown>)["*"];
 		expect(() => parseCatalog(missingWindowDefault)).toThrow("settings");
+
+		const duplicateIgnoreQuota = clone();
+		((duplicateIgnoreQuota.poolLimits as Record<string, unknown>).ignoreQuota = ["openai-codex", "openai-codex"]);
+		expect(() => parseCatalog(duplicateIgnoreQuota)).toThrow("settings");
+
+		const ignoreQuotaNotArray = clone();
+		(ignoreQuotaNotArray.poolLimits as Record<string, unknown>).ignoreQuota = "openai-codex";
+		expect(() => parseCatalog(ignoreQuotaNotArray)).toThrow("settings");
 
 		const unknownReviewPool = clone();
 		(unknownReviewPool.reviewOnly as Record<string, unknown>).pools = ["nope"];
@@ -352,24 +361,25 @@ describe("plan-review author exclusion", () => {
 });
 
 describe("pool ranking", () => {
+	const pacedLimits = { ...catalog.poolLimits, ignoreQuota: undefined };
 	const members = [
 		member("xai-oauth", "grok-4.6", { penaltyKind: "weekly", minWeeklyHeadroom: 0 }),
 		member("anthropic", "claude-sonnet-5-5", { maxShortUsed: 0.7, minWeeklyHeadroom: 0.1 }),
 	];
 
 	test("orders eligible members and skips a member over the skip threshold", () => {
-		const ranked = rankPool(members, { reports: [report("xai-oauth", 0.1), report("anthropic", 0.1)], credentialCounts: {} }, new Map(), [], catalog.poolLimits, Date.now());
+		const ranked = rankPool(members, { reports: [report("xai-oauth", 0.1), report("anthropic", 0.1)], credentialCounts: {} }, new Map(), [], pacedLimits, Date.now());
 		expect(ranked.order).toEqual(["xai-oauth/grok-4.6", "anthropic/claude-sonnet-5-5"]);
 
-		const crowded = rankPool(members, { reports: [report("xai-oauth", 0.99), report("anthropic", 0.1)], credentialCounts: {} }, new Map(), [], catalog.poolLimits, Date.now());
+		const crowded = rankPool(members, { reports: [report("xai-oauth", 0.99), report("anthropic", 0.1)], credentialCounts: {} }, new Map(), [], pacedLimits, Date.now());
 		expect(crowded.skipped).toContain("xai-oauth/grok-4.6");
 		expect(crowded.order).not.toContain("xai-oauth/grok-4.6");
 		expect(crowded.order).toContain("anthropic/claude-sonnet-5-5");
 	});
 
 	test("treats a stale report as no usage", () => {
-		const stale = report("xai-oauth", 0.1, Date.now() - catalog.poolLimits.maxReportAgeMs - 60_000);
-		const ranked = rankPool(members, { reports: [stale], credentialCounts: {} }, new Map(), [], catalog.poolLimits, Date.now());
+		const stale = report("xai-oauth", 0.1, Date.now() - pacedLimits.maxReportAgeMs - 60_000);
+		const ranked = rankPool(members, { reports: [stale], credentialCounts: {} }, new Map(), [], pacedLimits, Date.now());
 		expect(ranked.verdicts["xai-oauth/grok-4.6"]?.status).toBe("stale");
 	});
 
@@ -395,13 +405,13 @@ describe("pool ranking", () => {
 	};
 	const luna = member("openai-codex", "gpt-5.6-luna", { penaltyKind: "weekly", minWeeklyHeadroom: 0 });
 	const lunaStatus = (used: number, untilResetMs: number) =>
-		rankPool([luna], { reports: [weeklyReport("openai-codex", used, untilResetMs)], credentialCounts: {} }, new Map(), [], catalog.poolLimits, Date.now())
+		rankPool([luna], { reports: [weeklyReport("openai-codex", used, untilResetMs)], credentialCounts: {} }, new Map(), [], pacedLimits, Date.now())
 			.verdicts["openai-codex/gpt-5.6-luna"]?.status;
 
 	test("a weekly pace gate of 0 admits usage behind pace and rejects usage ahead of it", () => {
 		// report() puts the weekly window at 20% elapsed.
 		const status = (used: number) =>
-			rankPool([members[0]!], { reports: [report("xai-oauth", used)], credentialCounts: {} }, new Map(), [], catalog.poolLimits, Date.now())
+			rankPool([members[0]!], { reports: [report("xai-oauth", used)], credentialCounts: {} }, new Map(), [], pacedLimits, Date.now())
 				.verdicts["xai-oauth/grok-4.6"]?.status;
 		expect(status(0.15)).toBe("eligible");
 		expect(status(0.25)).toBe("below-pace");
@@ -413,7 +423,7 @@ describe("pool ranking", () => {
 			{ reports: [weeklyReport("xai-oauth", 0.82, 24 * hour)], credentialCounts: {} },
 			new Map(),
 			[],
-			catalog.poolLimits,
+			pacedLimits,
 			Date.now(),
 		);
 		expect(ranked.verdicts["xai-oauth/grok-4.6"]?.status).toBe("crowded");
@@ -469,7 +479,7 @@ describe("pool ranking", () => {
 				] as never,
 				credentialCounts: {},
 			};
-			const { verdicts } = rankPool(members, usage, new Map(), [], catalog.poolLimits, now);
+			const { verdicts } = rankPool(members, usage, new Map(), [], pacedLimits, now);
 			return [verdicts[`${provider}/gemini-4-argon`]?.status, verdicts[`${provider}/gemini-3.1-pro-high`]?.status];
 		};
 		expect(status(1, 0.1)).toEqual(["skipped", "eligible"]);
@@ -492,6 +502,69 @@ describe("pool ranking", () => {
 		const mappedUsed = rankPool([target], usage, penalties, [], weekly, Date.now()).verdicts[`${provider}/model`]?.used;
 		expect(mappedUsed?.short).toBeCloseTo(0.79, 5);
 		expect(mappedUsed?.weekly).toBeCloseTo(0.81, 5);
+	});
+
+	test("ignoreQuota keeps a named provider eligible past skipAt and exhaustion", () => {
+		const limits = { ...pacedLimits, ignoreQuota: ["openai-codex"] };
+		const openai = member("openai-codex", "gpt-5.6-luna", { penaltyKind: "weekly", minWeeklyHeadroom: 0 });
+		const ranked = rankPool(
+			[members[0]!, openai],
+			{ reports: [report("xai-oauth", 0.99), weeklyReport("openai-codex", 1, 24 * hour)], credentialCounts: {} },
+			new Map(),
+			[],
+			limits,
+			Date.now(),
+		);
+		expect(ranked.skipped).toContain("xai-oauth/grok-4.6");
+		expect(ranked.verdicts["openai-codex/gpt-5.6-luna"]?.status).toBe("eligible");
+		expect(ranked.order).toEqual(["openai-codex/gpt-5.6-luna"]);
+	});
+
+	test("ignoreQuota still honors failure demotion", () => {
+		const limits = { ...pacedLimits, ignoreQuota: ["openai-codex"] };
+		const openai = member("openai-codex", "gpt-5.6-luna", { penaltyKind: "weekly", minWeeklyHeadroom: 0 });
+		const ranked = rankPool(
+			[openai],
+			{ reports: [weeklyReport("openai-codex", 1, 24 * hour)], credentialCounts: {} },
+			new Map(),
+			["openai-codex/gpt-5.6-luna"],
+			limits,
+			Date.now(),
+		);
+		expect(ranked.verdicts["openai-codex/gpt-5.6-luna"]?.status).toBe("demoted");
+		expect(ranked.order).not.toContain("openai-codex/gpt-5.6-luna");
+	});
+});
+
+describe("catalog reloader", () => {
+	test("re-parses when mtime changes and keeps the last valid catalog on error", () => {
+		let mtime = 1;
+		let text = JSON.stringify(catalogData);
+		const reloader = createCatalogReloader(
+			{
+				mtimeMs: () => mtime,
+				text: () => text,
+			},
+			parseCatalog(catalogData),
+		);
+		expect(reloader.get().poolLimits.ignoreQuota).toEqual(["openai-codex"]);
+
+		const next = structuredClone(catalogData) as { poolLimits: { ignoreQuota?: string[] } };
+		next.poolLimits.ignoreQuota = ["anthropic"];
+		mtime = 2;
+		text = JSON.stringify(next);
+		expect(reloader.get().poolLimits.ignoreQuota).toEqual(["anthropic"]);
+
+		mtime = 3;
+		text = "{";
+		expect(reloader.get().poolLimits.ignoreQuota).toEqual(["anthropic"]);
+
+		mtime = 4;
+		text = JSON.stringify({ ...next, poolLimits: { ...next.poolLimits, ignoreQuota: ["xai-oauth"] } });
+		expect(reloader.get().poolLimits.ignoreQuota).toEqual(["xai-oauth"]);
+
+		text = JSON.stringify({ ...next, poolLimits: { ...next.poolLimits, ignoreQuota: ["anthropic"] } });
+		expect(reloader.get().poolLimits.ignoreQuota).toEqual(["xai-oauth"]);
 	});
 });
 

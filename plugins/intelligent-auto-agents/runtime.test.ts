@@ -338,8 +338,8 @@ describe("intelligent auto-agents runtime", () => {
 			["healthy", 0.05, 0.1, 0.1, 0],
 			["weekly headroom at minimum", 0.1, 0.1, 0.1, 0],
 			["weekly headroom below minimum", 0.11, 0.1, 0.1, 1],
-			["Anthropic and OpenAI gated", 0.11, 0.99, 0.1, 2],
-			["Anthropic, OpenAI, and xAI gated", 0.11, 0.99, 0.99, 3],
+			["Anthropic gated, OpenAI ignored", 0.11, 0.99, 0.1, 2],
+			["Anthropic and xAI gated, OpenAI ignored", 0.11, 0.99, 0.99, 3],
 		] as const) {
 			test(`${taskType} ${difficulty} routes with ${condition}`, async () => {
 				reset();
@@ -359,12 +359,11 @@ describe("intelligent auto-agents runtime", () => {
 				const sol = "openai-codex/gpt-6.1-sol";
 				const grok = "xai-oauth/grok-4.6";
 				const argon = "google-antigravity/gemini-4-argon";
-				expect(result.thinkingLevel).toBe(stage === 3 ? argonEffort : stage === 2 ? grokEffort : primaryEffort);
+				expect(result.thinkingLevel).toBe(primaryEffort);
 				expect(result.model).toEqual(
 					stage === 0 ? [opus, `${sol}:${primaryEffort}`, `${grok}:${grokEffort}`, `${argon}:${argonEffort}`]
-					: stage === 1 ? [sol, `${grok}:${grokEffort}`, `${argon}:${argonEffort}`]
-					: stage === 2 ? [grok, `${argon}:${argonEffort}`]
-					: [argon],
+					: stage === 3 ? [sol, `${argon}:${argonEffort}`]
+					: [sol, `${grok}:${grokEffort}`, `${argon}:${argonEffort}`],
 				);
 			});
 		}
@@ -380,7 +379,7 @@ describe("intelligent auto-agents runtime", () => {
 			usageReports: [usage("anthropic", 0.99), usage("xai-oauth"), usage("openai-codex", 0.99), ARGON_OUT],
 		});
 		expect(await spawn(fixture, { agent: "plan" })).toMatchObject({
-			model: ["xai-oauth/grok-4.6"], thinkingLevel: "medium",
+			model: ["xai-oauth/grok-4.6", "openai-codex/gpt-6.1-sol:high"], thinkingLevel: "medium",
 		});
 
 		reset();
@@ -419,7 +418,7 @@ describe("intelligent auto-agents runtime", () => {
 			usageReports: [usage("anthropic", 0.99), usage("openai-codex", 0.99), usage("xai-oauth"), ARGON_OUT],
 		});
 		expect(await spawn(fixture, { agent: "plan" })).toMatchObject({
-			model: ["xai-oauth/grok-rebound"], thinkingLevel: "high",
+			model: ["openai-codex/gpt-6.1-sol", "xai-oauth/grok-rebound:high"], thinkingLevel: "medium",
 		});
 	});
 
@@ -435,7 +434,7 @@ describe("intelligent auto-agents runtime", () => {
 		});
 	});
 
-	test("lead uses the rebound frontier-2 at xhigh as its all-members-skipped fallback", async () => {
+	test("lead uses rebound frontier-2 from the pool when OpenAI quota is ignored", async () => {
 		reset();
 		routeChoice = "lead";
 		difficultyScore = 0;
@@ -443,7 +442,7 @@ describe("intelligent auto-agents runtime", () => {
 			bindings: { ...DEFAULT_BINDINGS, "@frontier-2": model("fallback-rebound", ["high", "xhigh"], "openai-codex") },
 			usageReports: [usage("anthropic", 0.99), usage("openai-codex", 0.99), usage("xai-oauth", 0.99), ARGON_OUT],
 		});
-		expect(await spawn(fixture)).toMatchObject({ model: ["openai-codex/fallback-rebound"], thinkingLevel: "xhigh" });
+		expect(await spawn(fixture)).toMatchObject({ model: ["openai-codex/fallback-rebound"], thinkingLevel: "high" });
 	});
 
 	test("lead keeps a provider-failure retry chain and rolls past a suppressed Opus selector", async () => {
@@ -491,16 +490,16 @@ describe("intelligent auto-agents runtime", () => {
 		reset();
 		difficultyScore = 2;
 		routeChoice = "code";
-		// Anthropic, xAI, and OpenAI all out: hard code rolls to Gemini 4 Argon medium, matching Opus.
+		// Anthropic and xAI out: ignored OpenAI stays; Argon is the provider-failure backup.
 		const threeOut = [usage("anthropic", 0.99), usage("xai-oauth", 0.99), usage("openai-codex", 0.99)];
 		const argonHard = await spawn(createFixture({ usageReports: [...threeOut, usageReport("google-antigravity", "gemini-4-argon")] }));
-		expect(argonHard).toMatchObject({ model: ["google-antigravity/gemini-4-argon"], thinkingLevel: "medium" });
+		expect(argonHard).toMatchObject({ model: ["openai-codex/gpt-6.1-sol", "google-antigravity/gemini-4-argon:medium"], thinkingLevel: "low" });
 
 		reset();
 		difficultyScore = 3;
 		routeChoice = "code";
 		const argonCritical = await spawn(createFixture({ usageReports: [...threeOut, usageReport("google-antigravity", "gemini-4-argon")] }));
-		expect(argonCritical).toMatchObject({ model: ["google-antigravity/gemini-4-argon"], thinkingLevel: "high" });
+		expect(argonCritical).toMatchObject({ model: ["openai-codex/gpt-6.1-sol", "google-antigravity/gemini-4-argon:high"], thinkingLevel: "medium" });
 
 		reset();
 		difficultyScore = 2;
@@ -512,7 +511,7 @@ describe("intelligent auto-agents runtime", () => {
 		expect(allOut).toMatchObject({ model: ["openai-codex/gpt-6.1-sol"], thinkingLevel: "low" });
 	});
 
-	test("hard code keeps Opus first on pace and reaches Argon once Anthropic, xAI, and OpenAI are over weekly pace", async () => {
+	test("hard code keeps Opus first on pace and OpenAI before Argon when others are over weekly pace", async () => {
 		reset();
 		difficultyScore = 2;
 		routeChoice = "code";
@@ -528,8 +527,11 @@ describe("intelligent auto-agents runtime", () => {
 		// 50% used with 20% of the week elapsed: over pace, but far from exhausted or skipAt.
 		const overPace = [usage("anthropic", 0.5), usage("xai-oauth", 0.5), usage("openai-codex", 0.5)];
 		const fixture = createFixture({ usageReports: [...overPace, argonUsage()] });
-		expect(await spawn(fixture)).toMatchObject({ model: ["google-antigravity/gemini-4-argon"], thinkingLevel: "medium" });
-		expect(decisionData(fixture).pool).toMatchObject({ active: "google-antigravity/gemini-4-argon" });
+		expect(await spawn(fixture)).toMatchObject({
+			model: ["openai-codex/gpt-6.1-sol", "google-antigravity/gemini-4-argon:medium"],
+			thinkingLevel: "low",
+		});
+		expect(decisionData(fixture).pool).toMatchObject({ active: "openai-codex/gpt-6.1-sol" });
 	});
 
 	for (const [difficulty, level, solEffort, argonEffort] of [
@@ -538,7 +540,7 @@ describe("intelligent auto-agents runtime", () => {
 		["hard", 2, "high", "high"],
 		["critical", 3, "xhigh", "high"],
 	] as const) {
-		test(`${difficulty} review tries Argon after Sol and picks it when the others are over weekly pace`, async () => {
+		test(`${difficulty} review keeps Sol when others are over weekly pace`, async () => {
 			reset();
 			difficultyScore = level;
 			routeChoice = "review";
@@ -550,7 +552,8 @@ describe("intelligent auto-agents runtime", () => {
 			routeChoice = "review";
 			const overPace = [usage("anthropic", 0.5), usage("xai-oauth", 0.5), usage("openai-codex", 0.5), argonUsage()];
 			expect(await spawn(createFixture({ usageReports: overPace }), { agent: "reviewer" })).toMatchObject({
-				model: ["google-antigravity/gemini-4-argon"], thinkingLevel: argonEffort,
+				model: ["openai-codex/gpt-6.1-sol", `google-antigravity/gemini-4-argon:${argonEffort}`],
+				thinkingLevel: solEffort,
 			});
 		});
 	}
