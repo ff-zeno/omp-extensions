@@ -94,6 +94,7 @@ const LUNA = model("gpt-5.6-luna", ["low", "medium", "high", "xhigh", "max"], "o
 const HAIKU = model("claude-haiku-5-5", ["low", "medium", "high", "xhigh", "max"], "anthropic");
 const GEMINI = model("gemini-3.8-flash", ["low", "medium", "high"], "google-antigravity");
 const ARGON = model("gemini-4-argon", ["low", "medium", "high"], "google-antigravity");
+const DEEPSEEK = model("deepseek-ai/DeepSeek-V4.1-Flash-1017", ["low", "high", "max"], "deepinfra");
 const DEFAULT_BINDINGS: Record<string, RoutingTestModel> = {
 	"@frontier-1": OPUS,
 	"@frontier-2": SOL,
@@ -108,6 +109,7 @@ const DEFAULT_BINDINGS: Record<string, RoutingTestModel> = {
 	"openai-codex/gpt-6.1-sol": SOL,
 	"openai-codex/gpt-5.6-luna": LUNA,
 	"google-antigravity/gemini-4-argon": ARGON,
+	"deepinfra/deepseek-ai/DeepSeek-V4.1-Flash-1017": DEEPSEEK,
 };
 
 interface Fixture {
@@ -325,6 +327,145 @@ describe("intelligent auto-agents runtime", () => {
 		expect(judgeRequests[0].state).toContain("Routing guidance:");
 	});
 
+	test("case: DLG-001 routes bounded scout evidence through economical mechanical work", async () => {
+		reset();
+		routeChoice = "mechanical";
+		difficultyScore = 0;
+		const fixture = createFixture({ usageReports: [...ON_PACE, argonUsage()] });
+		const result = await spawn(fixture, { agent: "scout" });
+
+		expect(result).toMatchObject({ thinkingLevel: "xhigh" });
+		expect(result.model[0]).toBe("anthropic/claude-haiku-5-5");
+		expect(decisionData(fixture)).toMatchObject({ slot: "mechanical", difficulty: "exact" });
+		reset();
+		routeChoice = "mechanical";
+		difficultyScore = 1;
+		const ordinaryFixture = createFixture({ usageReports: [...ON_PACE, argonUsage()] });
+		const ordinaryResult = await spawn(ordinaryFixture, { agent: "scout" });
+		expect(ordinaryResult).toMatchObject({ thinkingLevel: "xhigh" });
+		expect(ordinaryResult.model[0]).toBe("anthropic/claude-haiku-5-5");
+		expect(decisionData(ordinaryFixture)).toMatchObject({ slot: "mechanical", difficulty: "ordinary" });
+
+	});
+
+	test("case: DLG-003 blocks a scout asked to make architecture or root-cause judgments", async () => {
+		reset();
+		routeChoice = "lead";
+		difficultyScore = 1;
+		const wrongJobFixture = createFixture({ usageReports: [...ON_PACE, argonUsage()] });
+		const wrongJobResult = await spawn(wrongJobFixture, { agent: "scout" });
+		expect(wrongJobResult).toMatchObject({ block: true });
+		expect(wrongJobResult.reason).toMatch(/reframe/i);
+		expect(decisionData(wrongJobFixture)).toMatchObject({ choice: "lead", difficulty: "ordinary" });
+
+		reset();
+		routeChoice = "mechanical";
+		difficultyScore = 2;
+		const wrongDifficultyFixture = createFixture({ usageReports: [...ON_PACE, argonUsage()] });
+		const wrongDifficultyResult = await spawn(wrongDifficultyFixture, { agent: "scout" });
+		expect(wrongDifficultyResult).toMatchObject({ block: true });
+		expect(wrongDifficultyResult.reason).toMatch(/reframe/i);
+		expect(decisionData(wrongDifficultyFixture)).toMatchObject({ choice: "mechanical", difficulty: "hard" });
+	});
+
+	test("case: DLG-004 blocks uncertain automatic type or difficulty for parent clarification", async () => {
+		reset();
+		routeChoice = "lead";
+		routeConfidence = 0.4;
+		const uncertainType = createFixture({ usageReports: [...ON_PACE, argonUsage()] });
+		const typeResult = await spawn(uncertainType);
+		expect(typeResult).toMatchObject({ block: true });
+		expect(typeResult.reason).toContain("Parent clarification required");
+
+		reset();
+		routeChoice = "code";
+		difficultyConfidence = 0.4;
+		const uncertainDifficulty = createFixture({ usageReports: [...ON_PACE, argonUsage()] });
+		const difficultyResult = await spawn(uncertainDifficulty);
+		expect(difficultyResult).toMatchObject({ block: true });
+		expect(difficultyResult.reason).toContain("Parent clarification required");
+		expect(decisionData(uncertainDifficulty)).toMatchObject({ choice: "code", reason: "uncertain-difficulty" });
+
+		reset();
+		difficultyConfidence = 0.4;
+		const taskTypeDirective = createFixture({ usageReports: [...ON_PACE, argonUsage()] });
+		const directiveResult = await spawn(taskTypeDirective, { assignment: "Directive: use code" });
+		expect(directiveResult).toMatchObject({ block: true });
+		expect(directiveResult.reason).toContain("Parent clarification required");
+		expect(decisionData(taskTypeDirective)).toMatchObject({ source: "baseline", reason: "uncertain-difficulty" });
+	});
+
+	test("case: DLG-005 accepts a clarified resubmission without persistent retry state", async () => {
+		reset();
+		routeChoice = "lead";
+		routeConfidence = 0.4;
+		const fixture = createFixture({ usageReports: [...ON_PACE, argonUsage()] });
+		expect(await spawn(fixture)).toMatchObject({ block: true });
+
+		routeChoice = "code";
+		routeConfidence = 0.98;
+		difficultyConfidence = 0.9;
+		const result = await spawn(fixture);
+		expect(result).toMatchObject({ thinkingLevel: "low" });
+		expect(result.block).toBeUndefined();
+		expect(decisionData(fixture)).toMatchObject({ slot: "code", difficulty: "ordinary" });
+	});
+
+	test("case: DLG-006 declines all automatic medium/slow selectors as chat-only", async () => {
+		for (const agent of ["medium", "slow1", "slow2", "slow3"]) {
+			reset();
+			routeChoice = "code";
+			routeConfidence = 0.98;
+			difficultyScore = 1;
+			difficultyConfidence = 0.9;
+			const fixture = createFixture();
+			const result = await spawn(fixture, { agent, patterns: ["@frontier-1"] });
+
+			expect(result).toMatchObject({ block: true });
+			expect(result.model).toBeUndefined();
+			expect(result.reason).toContain("chat-only");
+			expect(result.reason).toContain("choose a supported worker job instead");
+			expect(judgeCalls).toBe(0);
+			expect(decisionData(fixture)).toMatchObject({ source: "baseline", reason: "chat-only-selector" });
+		}
+	});
+
+	test("case: DLG-007 leaves an explicit pinned review request on its baseline", async () => {
+		reset();
+		judgeError = new Error("judge down");
+		const fixture = createFixture();
+		const result = await spawn(fixture, { agent: "review-frontier-1", patterns: ["@frontier-1"] });
+
+		expect(result).toBeUndefined();
+		expect(decisionData(fixture)).toMatchObject({ source: "baseline", reason: "routing-unavailable" });
+	});
+
+	test("case: DLG-007 preserves a named model when its optional effort rating is unavailable", async () => {
+		reset();
+		judgeError = new Error("judge down");
+		const fixture = createFixture();
+		const result = await spawn(fixture, { assignment: "Directive: use xai-oauth/grok-4.6" });
+
+		expect(result.model).toEqual(["xai-oauth/grok-4.6"]);
+		expect(result.block).toBeUndefined();
+		expect(decisionData(fixture).reason).toBe("routing-unavailable");
+	});
+
+	test("case: DLG-008 applies Codex quota gates in the spawn hook", async () => {
+		reset();
+		routeChoice = "code";
+		difficultyScore = 1;
+		const fixture = createFixture({
+			usageReports: [usage("anthropic", 0.99), usage("xai-oauth", 0.99), usage("openai-codex", 0.99), argonUsage()],
+		});
+		const result = await spawn(fixture);
+
+		expect(result).toMatchObject({ model: ["google-antigravity/gemini-4-argon"], thinkingLevel: "low" });
+		expect(decisionData(fixture).pool).toMatchObject({
+			verdicts: { "openai-codex/gpt-5.6-luna": { status: "skipped" } },
+		});
+	});
+
 	// Argon is unpinned in the lead pool: its map (low/medium/high/high) clamped to the task type's range.
 	for (const [taskType, agent, difficulty, level, primaryEffort, grokEffort, argonEffort] of [
 		["lead", "task", "hard", 2, "high", "xhigh", "high"],
@@ -338,8 +479,8 @@ describe("intelligent auto-agents runtime", () => {
 			["healthy", 0.05, 0.1, 0.1, 0],
 			["weekly headroom at minimum", 0.1, 0.1, 0.1, 0],
 			["weekly headroom below minimum", 0.11, 0.1, 0.1, 1],
-			["Anthropic gated, OpenAI ignored", 0.11, 0.99, 0.1, 2],
-			["Anthropic and xAI gated, OpenAI ignored", 0.11, 0.99, 0.99, 3],
+			["Anthropic gated, Codex gated", 0.11, 0.99, 0.1, 2],
+			["Anthropic, Codex, and xAI gated", 0.11, 0.99, 0.99, 3],
 		] as const) {
 			test(`${taskType} ${difficulty} routes with ${condition}`, async () => {
 				reset();
@@ -359,11 +500,13 @@ describe("intelligent auto-agents runtime", () => {
 				const sol = "openai-codex/gpt-6.1-sol";
 				const grok = "xai-oauth/grok-4.6";
 				const argon = "google-antigravity/gemini-4-argon";
-				expect(result.thinkingLevel).toBe(primaryEffort);
+				const activeEffort = stage === 0 || stage === 1 ? primaryEffort : stage === 2 ? grokEffort : argonEffort;
+				expect(result.thinkingLevel).toBe(activeEffort);
 				expect(result.model).toEqual(
 					stage === 0 ? [opus, `${sol}:${primaryEffort}`, `${grok}:${grokEffort}`, `${argon}:${argonEffort}`]
-					: stage === 3 ? [sol, `${argon}:${argonEffort}`]
-					: [sol, `${grok}:${grokEffort}`, `${argon}:${argonEffort}`],
+					: stage === 1 ? [`${sol}`, `${grok}:${grokEffort}`, `${argon}:${argonEffort}`]
+					: stage === 2 ? [grok, `${argon}:${argonEffort}`]
+					: [argon],
 				);
 			});
 		}
@@ -376,7 +519,7 @@ describe("intelligent auto-agents runtime", () => {
 		difficultyScore = 1;
 		const fixture = createFixture({
 			bindings: { ...DEFAULT_BINDINGS, "@frontier-2": GROK, "@frontier-3": SOL },
-			usageReports: [usage("anthropic", 0.99), usage("xai-oauth"), usage("openai-codex", 0.99), ARGON_OUT],
+			usageReports: [usage("anthropic", 0.99), usage("xai-oauth"), usage("openai-codex"), ARGON_OUT],
 		});
 		expect(await spawn(fixture, { agent: "plan" })).toMatchObject({
 			model: ["xai-oauth/grok-4.6", "openai-codex/gpt-6.1-sol:high"], thinkingLevel: "medium",
@@ -415,7 +558,7 @@ describe("intelligent auto-agents runtime", () => {
 		difficultyScore = 1;
 		const fixture = createFixture({
 			bindings: { ...DEFAULT_BINDINGS, "@frontier-3": model("grok-rebound", ["low", "medium", "high", "xhigh"], "xai-oauth") },
-			usageReports: [usage("anthropic", 0.99), usage("openai-codex", 0.99), usage("xai-oauth"), ARGON_OUT],
+			usageReports: [usage("anthropic", 0.99), usage("openai-codex"), usage("xai-oauth"), ARGON_OUT],
 		});
 		expect(await spawn(fixture, { agent: "plan" })).toMatchObject({
 			model: ["openai-codex/gpt-6.1-sol", "xai-oauth/grok-rebound:high"], thinkingLevel: "medium",
@@ -430,17 +573,17 @@ describe("intelligent auto-agents runtime", () => {
 		delete bindings["@frontier-1"];
 		const fixture = createFixture({ bindings, usageReports: [...ON_PACE, ARGON_OUT] });
 		expect(await spawn(fixture)).toMatchObject({
-			model: ["openai-codex/gpt-6.1-sol"], thinkingLevel: "xhigh",
+			model: ["deepinfra/deepseek-ai/DeepSeek-V4.1-Flash-1017"], thinkingLevel: "high",
 		});
 	});
 
-	test("lead uses rebound frontier-2 from the pool when OpenAI quota is ignored", async () => {
+	test("lead uses an eligible rebound frontier-2 from the pool", async () => {
 		reset();
 		routeChoice = "lead";
 		difficultyScore = 0;
 		const fixture = createFixture({
 			bindings: { ...DEFAULT_BINDINGS, "@frontier-2": model("fallback-rebound", ["high", "xhigh"], "openai-codex") },
-			usageReports: [usage("anthropic", 0.99), usage("openai-codex", 0.99), usage("xai-oauth", 0.99), ARGON_OUT],
+			usageReports: [usage("anthropic", 0.99), usage("openai-codex"), usage("xai-oauth", 0.99), ARGON_OUT],
 		});
 		expect(await spawn(fixture)).toMatchObject({ model: ["openai-codex/fallback-rebound"], thinkingLevel: "high" });
 	});
@@ -490,28 +633,56 @@ describe("intelligent auto-agents runtime", () => {
 		reset();
 		difficultyScore = 2;
 		routeChoice = "code";
-		// Anthropic and xAI out: ignored OpenAI stays; Argon is the provider-failure backup.
+		// Anthropic, xAI, and exhausted Codex are skipped; Argon is next.
 		const threeOut = [usage("anthropic", 0.99), usage("xai-oauth", 0.99), usage("openai-codex", 0.99)];
 		const argonHard = await spawn(createFixture({ usageReports: [...threeOut, usageReport("google-antigravity", "gemini-4-argon")] }));
-		expect(argonHard).toMatchObject({ model: ["openai-codex/gpt-6.1-sol", "google-antigravity/gemini-4-argon:medium"], thinkingLevel: "low" });
+		expect(argonHard).toMatchObject({ model: ["google-antigravity/gemini-4-argon"], thinkingLevel: "medium" });
 
 		reset();
 		difficultyScore = 3;
 		routeChoice = "code";
 		const argonCritical = await spawn(createFixture({ usageReports: [...threeOut, usageReport("google-antigravity", "gemini-4-argon")] }));
-		expect(argonCritical).toMatchObject({ model: ["openai-codex/gpt-6.1-sol", "google-antigravity/gemini-4-argon:high"], thinkingLevel: "medium" });
+		expect(argonCritical).toMatchObject({ model: ["google-antigravity/gemini-4-argon"], thinkingLevel: "high" });
 
 		reset();
 		difficultyScore = 2;
 		routeChoice = "code";
-		// Every provider exhausted: the code pool fallback is Sol low, ungated.
-		const allOut = await spawn(
-			createFixture({ usageReports: [...threeOut, usageReport("google-antigravity", "gemini-4-argon", Date.now(), 0.99)] }),
-		);
-		expect(allOut).toMatchObject({ model: ["openai-codex/gpt-6.1-sol"], thinkingLevel: "low" });
+		// With every quota-gated member out, the pool uses its DeepSeek fallback.
+		const allOutOptions = {
+			usageReports: [...threeOut, usageReport("google-antigravity", "gemini-4-argon", Date.now(), 0.99)],
+		};
+		for (const sessionId of ["demote-1", "demote-2"]) {
+			const routed = createFixture(allOutOptions);
+			await spawn(routed);
+			const child = createFixture({
+				agent: { kind: "sub", name: "task", depth: 1 },
+				model: SOL,
+				sessionId,
+			});
+			child.hooks.agent_end?.(
+				{ messages: [{ role: "assistant", provider: "other", model: "other", stopReason: "stop" }], willContinue: false },
+				child.ctx,
+			);
+		}
+		const allOut = await spawn(createFixture(allOutOptions));
+		expect(allOut).toMatchObject({ model: ["deepinfra/deepseek-ai/DeepSeek-V4.1-Flash-1017"], thinkingLevel: "high" });
+
+		reset();
+		difficultyScore = 2;
+		routeChoice = "mechanical";
+		expect(await spawn(createFixture(allOutOptions))).toMatchObject({
+			model: ["deepinfra/deepseek-ai/DeepSeek-V4.1-Flash-1017"], thinkingLevel: "low",
+		});
+
+		reset();
+		difficultyScore = 2;
+		routeChoice = "review";
+		expect(await spawn(createFixture(allOutOptions), { agent: "reviewer" })).toMatchObject({
+			model: ["deepinfra/deepseek-ai/DeepSeek-V4.1-Flash-1017"], thinkingLevel: "high",
+		});
 	});
 
-	test("hard code keeps Opus first on pace and OpenAI before Argon when others are over weekly pace", async () => {
+	test("hard code keeps Opus first on pace and Codex before Argon when others are over weekly pace", async () => {
 		reset();
 		difficultyScore = 2;
 		routeChoice = "code";
@@ -524,8 +695,8 @@ describe("intelligent auto-agents runtime", () => {
 		reset();
 		difficultyScore = 2;
 		routeChoice = "code";
-		// 50% used with 20% of the week elapsed: over pace, but far from exhausted or skipAt.
-		const overPace = [usage("anthropic", 0.5), usage("xai-oauth", 0.5), usage("openai-codex", 0.5)];
+		// Anthropic/xAI are over weekly pace; Codex remains on pace and is eligible.
+		const overPace = [usage("anthropic", 0.5), usage("xai-oauth", 0.5), usage("openai-codex", 0.1)];
 		const fixture = createFixture({ usageReports: [...overPace, argonUsage()] });
 		expect(await spawn(fixture)).toMatchObject({
 			model: ["openai-codex/gpt-6.1-sol", "google-antigravity/gemini-4-argon:medium"],
@@ -550,7 +721,7 @@ describe("intelligent auto-agents runtime", () => {
 			reset();
 			difficultyScore = level;
 			routeChoice = "review";
-			const overPace = [usage("anthropic", 0.5), usage("xai-oauth", 0.5), usage("openai-codex", 0.5), argonUsage()];
+			const overPace = [usage("anthropic", 0.5), usage("xai-oauth", 0.5), usage("openai-codex", 0.1), argonUsage()];
 			expect(await spawn(createFixture({ usageReports: overPace }), { agent: "reviewer" })).toMatchObject({
 				model: ["openai-codex/gpt-6.1-sol", `google-antigravity/gemini-4-argon:${argonEffort}`],
 				thinkingLevel: solEffort,
@@ -623,7 +794,7 @@ describe("intelligent auto-agents runtime", () => {
 	test("a pinned agent with no routable effort keeps the baseline", async () => {
 		reset();
 		const fixture = createFixture();
-		const result = await spawn(fixture, { agent: "medium", patterns: ["@missing"] });
+		const result = await spawn(fixture, { agent: "review-frontier-1", patterns: ["@missing"] });
 		expect(result).toBeUndefined();
 		expect(decisionData(fixture)).toMatchObject({ source: "baseline", reason: "no-routable-effort" });
 	});
@@ -704,13 +875,14 @@ describe("intelligent auto-agents runtime", () => {
 		expect(result.model[0]).toBe("google-antigravity/gemini-3.8-flash");
 	});
 
-	test("a failed difficulty rating keeps the baseline spawn", async () => {
+	test("case: DLG-004 a failed automatic difficulty rating blocks for parent clarification", async () => {
 		reset();
 		judgeError = new Error("judge down");
 		routeChoice = "code";
 		const fixture = createFixture();
 		const result = await spawn(fixture);
-		expect(result).toBeUndefined();
+		expect(result).toMatchObject({ block: true });
+		expect(result.reason).toContain("Parent clarification required");
 		expect(decisionData(fixture)).toMatchObject({ source: "baseline" });
 	});
 

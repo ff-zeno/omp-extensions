@@ -5,7 +5,7 @@ description: Use when delegating OMP work with intelligent auto-agents enabled, 
 
 # Intelligent auto-agents
 
-Jev is the router described by `catalog.json` (catalog v9). Before each covered or pinned subagent spawn it selects a task type, rates difficulty, and resolves a concrete model and effort.
+Jev is the router described by `catalog.json` (catalog v9). Eligible automatic worker spawns get task-type/difficulty routing or pinned-worker effort selection; operator chat choices stay unchanged.
 
 ## Terms
 
@@ -15,7 +15,7 @@ Jev is the router described by `catalog.json` (catalog v9). Before each covered 
 - **Role alias** means a selector such as `@fast` or `@frontier-2` that resolves through `modelRoles`.
 - **Job** means the worker purpose selected with the `agent` field.
 - **Covered agent** means an agent routed through a task type: `task`, `sonic`, `scout`, `reviewer`, `security-reviewer`, `git`, and `plan`.
-- **Pinned agent** means an agent that keeps its bound model while Jev sets only effort: `orchestrator`, `design-master`, `design-second`, `review-closer`, `review-verifier`, `review-frontier-1`, `review-frontier-2`, `review-frontier-3`, and the chat-cycle roles `medium` and `slow1`–`slow3`.
+- **Pinned agent** means a worker that keeps its bound model while Jev sets only effort: `orchestrator`, `design-master`, `design-second`, `review-closer`, `review-verifier`, `review-frontier-1`, `review-frontier-2`, and `review-frontier-3`. Medium/slow1–3 are chat-only choices; automatic worker selectors using them are declined with guidance to choose a supported job.
 - **Task type** means a named kind of work — `mechanical`, `commit`, `code`, `review`, `lead`, `vision`, `security-review`, `plan`, `plan-review`, `frontier-review` — with a fixed model or a pool, plus an effort range.
 - **Pool** means an ordered member list (`mechanical`, `commit`, `code`, `review`, `lead`, `plan-review`) that Jev ranks by quota before each spawn.
 - **Difficulty** means `exact`, `ordinary`, `hard`, or `critical`, rated from the work itself.
@@ -54,10 +54,10 @@ Highest wins:
 1. If the user names a model, role, or reasoning level, pass the matching agent with `routing: "off"`.
 2. If no model or role is named, pass only the requested `agent` and an optional persona header.
 3. Never pass a model or effort that the user did not request.
-4. Fill each stage with concrete assignments, owned paths, shared contracts, and acceptance criteria.
-5. Dispatch independent assignments together and let later stages consume earlier results.
+4. Fill each stage with concrete assignments, owned paths, shared contracts, acceptance criteria, and a `solutionSpace` describing the assigned slice rather than the surrounding problem.
+5. Delegate useful substantive evidence/execution before doing the bulk in the parent; dispatch independent assignments together. Keep conversation, trivial actions, decisions and integration inline. A bounded worker executes its assignment directly, without recursive delegation ceremony.
 6. To steer Jev without disabling routing, add a `Directive: use <alias|model> [effort]` line to the brief.
-7. If no routed option resolves, Jev keeps the configured model and effort; the extension never fails a spawn because a role is missing.
+7. When automatic type/difficulty is uncertain or classification is unavailable, use the block reason to sharpen the assignment once from existing context. Ask the operator only for a material decision; do not resend unchanged or do the blocked bulk task inline.
 
 ## Recipes
 
@@ -80,7 +80,7 @@ Covered agents resolve a task type, then that type's pool or fixed model:
 - `task` uses `code` for settled specifications, `lead` when judgment, hard debugging, or root-cause work is needed, `vision` for image, screenshot, or video analysis, and `mechanical` or `commit` when the brief is exact non-code work or git operations.
 - `reviewer` uses `review` for settled-spec verification of an implemented diff, and `plan-review` (or `frontier-review`) when the assignment reviews a plan.
 - `sonic` uses `mechanical` for non-code writes with exact content (docs text, config values, data files) and directed tool runs; any source-code edit, however trivial, goes to `task`.
-- `scout` uses `code` for read-only investigation.
+- `scout` uses economical `mechanical` exact/ordinary workers for bounded read-only evidence collection. Rate that slice, not the surrounding problem; architecture/root-cause judgment or hard/critical work must be reframed or assigned separately.
 - `git` is pinned to `commit` for commits, branches, merges, and pull requests.
 - `plan` uses the quota-aware `lead` pool at medium to xhigh and may be rated for difficulty.
 - `security-reviewer` uses `security-review`, sharing the quota-aware `lead` pool at high to xhigh.
@@ -95,8 +95,8 @@ Pinned agents keep their bound `modelRoles`; Jev sets only effort from the model
 Jev rates difficulty as Exact, Ordinary, Hard, or Critical according to the catalog ladder.
 A pool member scoped with `difficulties` serves only those levels.
 The `mechanical`, `commit`, `code`, and `review` pools list one member per provider per difficulty, tried Anthropic, then xAI, then OpenAI, because Haiku, Sonnet, and Opus share one Anthropic quota, so rolling over inside a provider buys nothing.
-The `mechanical`, `commit`, `code`, and `review` pools fall back to `openai-codex/gpt-6.1-sol` low when every member is quota-skipped.
-The `lead`, `plan`, and `security-review` task types share the `lead` pool: `@frontier-1` → `@frontier-2` → `@frontier-3` → `google-antigravity/gemini-4-argon`. Anthropic uses the same quota gates as other worker pools; the other members use weekly headroom 0. Opus keeps its model-map effort, clamped to high–xhigh for lead/security review and medium–xhigh for planning. Both frontier rollover members set `effortFrom: "@frontier-1"`; frontier-2 matches that effort, while frontier-3 sets `effortStep: 1` for one level higher, capped at xhigh. Argon uses its own map (low, medium, high, high) under the same clamp. Members do not pin effort. Remaining eligible members stay in the provider-failure retry chain. The all-skipped fallback is `@frontier-2:xhigh`.
+The `mechanical` and `commit` pools fall back to `deepinfra/deepseek-ai/DeepSeek-V4.1-Flash-1017` low when every member is quota-skipped. The `code` and `review` pools use that same fallback at high.
+The `lead`, `plan`, and `security-review` task types share the `lead` pool: `@frontier-1` → `@frontier-2` → `@frontier-3` → `google-antigravity/gemini-4-argon`. Anthropic uses the same quota gates as other worker pools; the other members use weekly headroom 0. Opus keeps its model-map effort, clamped to high–xhigh for lead/security review and medium–xhigh for planning. Both frontier rollover members set `effortFrom: "@frontier-1"`; frontier-2 matches that effort, while frontier-3 sets `effortStep: 1` for one level higher, capped at xhigh. Argon uses its own map (low, medium, high, high) under the same clamp. Members do not pin effort. Remaining eligible members stay in the provider-failure retry chain. The all-skipped fallback is `deepinfra/deepseek-ai/DeepSeek-V4.1-Flash-1017:high`.
 
 | Pool | Difficulty | Anthropic | xAI (Grok) | OpenAI |
 |---|---|---|---|---|
@@ -167,9 +167,9 @@ There is no keyword or file-extension detector; to force media routing, add `Dir
 
 Jev evaluates routing requests through TypeSafe.
 Authenticate with `/login typesafe` or set `TYPESAFE_API_KEY`.
-Without a TypeSafe key, Jev records a baseline decision and keeps the configured model and effort.
-Jev failures, low confidence, routing disabled, locked requests, and unresolvable pools also keep the baseline configuration.
-Quota is not a global dispatch cap: `plan-review` members are ungated, missing usage can still select Anthropic, and a failed usage fetch preserves pool order. Fixed `vision` keeps its provider-failure `@lead` backup without quota checks; directives and pinned agents also intentionally bypass pool gates. All-skipped worker fallbacks do not recheck quota. `poolLimits.ignoreQuota` names providers that skip usage ranking; the shipped catalog ignores `openai-codex`. Catalog.json is re-read on each spawn when its mtime changes.
+Without a TypeSafe key, ordinary automatic jobs return a routing-unavailable block/reason to the parent instead of silently keeping the configured model.
+Jev failure or uncertain required type/difficulty also blocks ordinary automatic jobs. Task-type directives still require confident necessary difficulty. Deliberate named-model/pinned review requests retain their explicit choices; routing disabled, explicit model/effort locks and unresolvable pools preserve their existing baseline behavior.
+Quota is not a global dispatch cap: `plan-review` members are ungated, missing usage can still select Anthropic, and a failed usage fetch preserves pool order. Fixed `vision` keeps its provider-failure `@lead` backup without quota checks; named models and pinned agents intentionally bypass pool gates. All-skipped worker fallbacks do not recheck quota. The shipped catalog no longer exempts Codex from normal quota ranking. Catalog.json is re-read on each spawn when its mtime changes.
 
 ## Visibility
 

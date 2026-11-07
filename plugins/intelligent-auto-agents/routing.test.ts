@@ -91,7 +91,7 @@ describe("catalog v9", () => {
 		expect(catalog.nuances.length).toBeGreaterThan(0);
 		expect(catalog.planningReadiness.agents).toEqual(["plan"]);
 		expect(catalog.blockedDirectiveTargets).toEqual(["luna", "astra"]);
-		expect(catalog.poolLimits.ignoreQuota).toEqual(["openai-codex"]);
+		expect(catalog.poolLimits.ignoreQuota).toBeUndefined();
 		expect(catalog.jevInstructions.route.length).toBeGreaterThan(0);
 	});
 
@@ -504,31 +504,29 @@ describe("pool ranking", () => {
 		expect(mappedUsed?.weekly).toBeCloseTo(0.81, 5);
 	});
 
-	test("ignoreQuota keeps a named provider eligible past skipAt and exhaustion", () => {
-		const limits = { ...pacedLimits, ignoreQuota: ["openai-codex"] };
+	test("[DLG-008] quota gates Codex members past skipAt and exhaustion", () => {
 		const openai = member("openai-codex", "gpt-5.6-luna", { penaltyKind: "weekly", minWeeklyHeadroom: 0 });
 		const ranked = rankPool(
 			[members[0]!, openai],
 			{ reports: [report("xai-oauth", 0.99), weeklyReport("openai-codex", 1, 24 * hour)], credentialCounts: {} },
 			new Map(),
 			[],
-			limits,
+			pacedLimits,
 			Date.now(),
 		);
 		expect(ranked.skipped).toContain("xai-oauth/grok-4.6");
-		expect(ranked.verdicts["openai-codex/gpt-5.6-luna"]?.status).toBe("eligible");
-		expect(ranked.order).toEqual(["openai-codex/gpt-5.6-luna"]);
+		expect(ranked.verdicts["openai-codex/gpt-5.6-luna"]?.status).toBe("skipped");
+		expect(ranked.order).not.toContain("openai-codex/gpt-5.6-luna");
 	});
 
-	test("ignoreQuota still honors failure demotion", () => {
-		const limits = { ...pacedLimits, ignoreQuota: ["openai-codex"] };
+	test("eligible Codex still honors failure demotion", () => {
 		const openai = member("openai-codex", "gpt-5.6-luna", { penaltyKind: "weekly", minWeeklyHeadroom: 0 });
 		const ranked = rankPool(
 			[openai],
-			{ reports: [weeklyReport("openai-codex", 1, 24 * hour)], credentialCounts: {} },
+			{ reports: [weeklyReport("openai-codex", 0.1, 24 * hour)], credentialCounts: {} },
 			new Map(),
 			["openai-codex/gpt-5.6-luna"],
-			limits,
+			pacedLimits,
 			Date.now(),
 		);
 		expect(ranked.verdicts["openai-codex/gpt-5.6-luna"]?.status).toBe("demoted");
@@ -547,7 +545,7 @@ describe("catalog reloader", () => {
 			},
 			parseCatalog(catalogData),
 		);
-		expect(reloader.get().poolLimits.ignoreQuota).toEqual(["openai-codex"]);
+		expect(reloader.get().poolLimits.ignoreQuota).toBeUndefined();
 
 		const next = structuredClone(catalogData) as { poolLimits: { ignoreQuota?: string[] } };
 		next.poolLimits.ignoreQuota = ["anthropic"];

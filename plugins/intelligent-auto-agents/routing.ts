@@ -10,7 +10,8 @@ export const EFFORTS = ["low", "medium", "high", "xhigh", "max"] as const;
 export type Effort = (typeof EFFORTS)[number];
 /**
  * Difficulty names, lowest first. Jev scores difficulty 0..3 against this order, so index 0 is
- * `exact` and index 1 (`ordinary`) is the fallback when the rating is uncertain.
+ * `exact` and index 1 (`ordinary`) is the fallback only for deliberate named or pinned requests
+ * when no automatic classification is required.
  */
 export const DIFFICULTY_NAMES = ["exact", "ordinary", "hard", "critical"] as const;
 export type Difficulty = (typeof DIFFICULTY_NAMES)[number];
@@ -1190,7 +1191,8 @@ export async function choose(
 		const uncertainDifficulty = rateDifficulty && difficulty === undefined;
 		if (uncertainDifficulty) {
 			if (!rated) throw new InvalidResponseError();
-			// A confident task-type choice survives an uncertain rating; the caller uses ordinary difficulty.
+			// Preserve a confident task-type choice as evidence, but leave difficulty undefined:
+			// automatic callers must block for clarification; deliberate model choices may keep their baseline.
 			if (choice === undefined)
 				return { source: "baseline", confidence: rated.confidence, reason: "uncertain-difficulty", ...extras };
 		}

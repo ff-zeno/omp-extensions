@@ -84,6 +84,21 @@ function cappedPersona(decision: Decision): Persona | undefined {
 		? "brute"
 		: "normal";
 }
+const AUTOMATIC_PINNED_AGENTS: Record<string, true> = { medium: true, slow1: true, slow2: true, slow3: true };
+
+function isAutomaticPinnedAgent(agent: string): boolean {
+	return AUTOMATIC_PINNED_AGENTS[agent] === true;
+}
+
+function parentClarificationReason(agent: string, decision: Decision): string {
+	const detail = decision.reason.replaceAll("-", " ");
+	return `[JEV Intercept] Parent clarification required before delegating this automatic ${agent} spawn; Jev could not confidently classify it (${detail}).`;
+}
+
+function scoutClarificationReason(decision: Decision): string {
+	const detail = decision.reason.replaceAll("-", " ");
+	return `[JEV Intercept] Scout assignments are limited to bounded read-only evidence collection. Reframe architecture or root-cause judgment as an evidence request; parent clarification required (${detail}).`;
+}
 
 type PoolReservation = {
 	token: string;
@@ -774,6 +789,12 @@ export function register(pi: ExtensionAPI): void {
 			reportSkipped(ctx, event.agent, "unknown-agent", `Jev skipped · ${event.agent} · unknown agent · baseline kept`);
 			return;
 		}
+		if (isAutomaticPinnedAgent(event.agent)) {
+			const reason = `[JEV Intercept] ${event.agent} is chat-only; choose a supported worker job instead.`;
+			reportSkipped(ctx, event.agent, "chat-only-selector", `Jev declined · ${event.agent} · chat-only selector · spawn blocked`);
+			if (ctx.hasUI) ctx.ui.notify(reason, "warning");
+			return { block: true, reason };
+		}
 		const solutionSpace = "solutionSpace" in event ? event.solutionSpace : undefined;
 		const state = [
 			JSON.stringify({
@@ -893,18 +914,42 @@ export function register(pi: ExtensionAPI): void {
 		const personaRoute = persona ? { persona } : {};
 		if (needsTaskChoice && candidates.length > 1) {
 			if (decision.source === "baseline") {
-				reportDecision(ctx, decision, event.agent, personaRoute, latencyMs);
-				return;
+				const reason = event.agent === "scout" ? scoutClarificationReason(decision) : parentClarificationReason(event.agent, decision);
+				const note = reportDecision(ctx, decision, event.agent, personaRoute, latencyMs);
+				if (ctx.hasUI) ctx.ui.notify(reason, "warning");
+				return { block: true, reason, note };
 			}
 			taskTypeName = decision.choice;
 		}
 		if (taskTypeName === undefined && directiveModel === undefined) {
-			reportDecision(ctx, decision, event.agent, personaRoute, latencyMs);
-			return;
+			const reason = event.agent === "scout" ? scoutClarificationReason(decision) : parentClarificationReason(event.agent, decision);
+			const note = reportDecision(ctx, decision, event.agent, personaRoute, latencyMs);
+			if (ctx.hasUI) ctx.ui.notify(reason, "warning");
+			return { block: true, reason, note };
+		}
+		const automaticClassification = directiveModel === undefined;
+		if (
+			(event.agent === "scout" && directiveModel === undefined && decision.source === "baseline") ||
+			(automaticClassification && rateDifficulty && (decision.source === "baseline" || decision.difficulty === undefined))
+		) {
+			const reason = event.agent === "scout" ? scoutClarificationReason(decision) : parentClarificationReason(event.agent, decision);
+			const note = reportDecision(ctx, decision, event.agent, personaRoute, latencyMs);
+			if (ctx.hasUI) ctx.ui.notify(reason, "warning");
+			return { block: true, reason, note };
 		}
 		const difficulty = decision.difficulty ?? ORDINARY;
 		const boundPattern = event.patterns[0] ?? (event.modelRole ? `@${event.modelRole}` : undefined);
 		const boundModel = boundPattern ? ctx.models.resolve(boundPattern) : undefined;
+		if (
+			event.agent === "scout" &&
+			((directiveModel === undefined && taskTypeName !== "mechanical") ||
+				(decision.difficulty !== undefined && DIFFICULTY_NAMES.indexOf(decision.difficulty) > DIFFICULTY_NAMES.indexOf(ORDINARY)))
+		) {
+			const reason = scoutClarificationReason(decision);
+			const note = reportDecision(ctx, decision, event.agent, personaRoute, latencyMs);
+			if (ctx.hasUI) ctx.ui.notify(reason, "warning");
+			return { block: true, reason, note };
+		}
 		const attempts: RouteOption[] = [];
 		let poolMembers: PoolMember[] = [];
 		let poolRoute: PoolRouteReport | undefined;
