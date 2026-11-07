@@ -1,0 +1,498 @@
+{
+  "area": "delegation-routing",
+  "machines": {},
+  "cases": [
+    {
+      "id": "DLG-001",
+      "title": "A suitable evidence job uses an economical worker",
+      "tier": "medium",
+      "given": "The task contains a clearly bounded evidence job that does not need final judgment or hard execution.",
+      "when": "The parent routes that evidence job with enough information to choose its worker.",
+      "then": "The job is assigned to an economical non-lead, non-hard worker, and its bounded findings return to the parent.",
+      "why": "Substantive evidence work is handled without spending a lead or hard-execution worker on collection.",
+      "source": "supplied operator intent: Delegate substantive evidence collection/execution early; conversation and trivial work stay inline.",
+      "status": "approved",
+      "approved_at": "2026-11-06",
+      "comment": "auto: agent-owned",
+      "visual": {
+        "kind": "sequence",
+        "actors": [
+          {
+            "id": "operator",
+            "label": "Operator"
+          },
+          {
+            "id": "parent",
+            "label": "Parent"
+          },
+          {
+            "id": "evidence-worker",
+            "label": "Economical evidence worker"
+          }
+        ],
+        "setup": [
+          {
+            "actor": "operator",
+            "text": "A clearly bounded evidence job does not need final judgment or hard execution."
+          }
+        ],
+        "steps": [
+          {
+            "from": "operator",
+            "to": "parent",
+            "text": "Ask for the substantive task.",
+            "kind": "action"
+          },
+          {
+            "from": "parent",
+            "to": "evidence-worker",
+            "text": "Assign the bounded evidence job to an economical worker.",
+            "kind": "call"
+          },
+          {
+            "from": "evidence-worker",
+            "to": "parent",
+            "text": "Return bounded findings without taking a lead decision.",
+            "kind": "return"
+          },
+          {
+            "from": "parent",
+            "to": "operator",
+            "text": "Use the findings to continue the task.",
+            "kind": "return"
+          }
+        ],
+        "asserts": [
+          {
+            "text": "The bounded evidence job is assigned to an economical worker.",
+            "polarity": "must"
+          },
+          {
+            "text": "The parent receives the worker's bounded findings.",
+            "polarity": "must"
+          },
+          {
+            "text": "A lead or hard-execution worker is not assigned to collect the evidence.",
+            "polarity": "must_not"
+          }
+        ]
+      }
+    },
+    {
+      "id": "DLG-003",
+      "title": "A misframed judgment scout is paused and reframed",
+      "tier": "medium",
+      "given": "A scout receives an assignment that asks it to make a final judgment or lead hard execution.",
+      "when": "The parent reviews the assignment before the scout proceeds.",
+      "then": "The scout is paused with a reframe reason, and the work can be separated into bounded evidence for the scout and judgment or hard execution for the parent or another worker.",
+      "why": "Scouts remain economical evidence collectors instead of silently becoming expensive judgment workers.",
+      "source": "supplied operator intent: Scouts collect bounded evidence and never become lead/hard judgment workers. A misframed scout should be reframed.",
+      "status": "approved",
+      "approved_at": "2026-11-06",
+      "comment": "auto: agent-owned",
+      "visual": {
+        "kind": "sequence",
+        "actors": [
+          {
+            "id": "parent",
+            "label": "Parent"
+          },
+          {
+            "id": "scout",
+            "label": "Scout"
+          },
+          {
+            "id": "worker",
+            "label": "Judgment or execution worker"
+          }
+        ],
+        "setup": [
+          {
+            "actor": "scout",
+            "text": "The assignment asks for a final judgment or hard execution."
+          }
+        ],
+        "steps": [
+          {
+            "from": "parent",
+            "to": "scout",
+            "text": "Review the assignment before the scout proceeds.",
+            "kind": "call"
+          },
+          {
+            "from": "parent",
+            "to": "scout",
+            "text": "Pause the scout and provide the reason for the reframe.",
+            "kind": "action"
+          },
+          {
+            "from": "parent",
+            "to": "scout",
+            "text": "Separate the bounded evidence work from judgment or hard execution.",
+            "kind": "action"
+          },
+          {
+            "from": "scout",
+            "to": "parent",
+            "text": "Return evidence only after the reframe.",
+            "kind": "return"
+          },
+          {
+            "from": "parent",
+            "to": "worker",
+            "text": "Keep final judgment or hard execution with the parent or another worker.",
+            "kind": "call"
+          }
+        ],
+        "asserts": [
+          {
+            "text": "The scout is paused with a clear reframe reason.",
+            "polarity": "must"
+          },
+          {
+            "text": "The work can be separated into bounded evidence and judgment or hard execution.",
+            "polarity": "must"
+          },
+          {
+            "text": "The scout does not silently execute the judgment or hard-execution assignment.",
+            "polarity": "must_not"
+          }
+        ]
+      }
+    },
+    {
+      "id": "DLG-004",
+      "title": "Uncertain routing returns to the parent",
+      "tier": "medium",
+      "given": "A routing attempt cannot confidently determine the general task type or difficulty from the available context.",
+      "when": "Routing returns the uncertain decision to the parent.",
+      "then": "The parent sharpens the task from existing context for one clarified retry, asking the operator only if a material decision is needed.",
+      "why": "Uncertain routing gets a focused parent decision instead of silently retaining an expensive lead-derived model.",
+      "source": "supplied operator intent: Uncertain general task type or difficulty should return to parent for ONE clarified retry, never silently retain an expensive lead-derived model.",
+      "status": "approved",
+      "approved_at": "2026-11-06",
+      "comment": "auto: agent-owned",
+      "visual": {
+        "kind": "sequence",
+        "actors": [
+          {
+            "id": "routing",
+            "label": "Routing"
+          },
+          {
+            "id": "parent",
+            "label": "Parent"
+          }
+        ],
+        "setup": [
+          {
+            "actor": "routing",
+            "text": "Task type or difficulty remains uncertain from the available context."
+          }
+        ],
+        "steps": [
+          {
+            "from": "routing",
+            "to": "parent",
+            "text": "Return the uncertain decision to the parent.",
+            "kind": "return"
+          },
+          {
+            "from": "parent",
+            "to": "parent",
+            "text": "Sharpen the task from existing context for one clarified retry.",
+            "kind": "action"
+          }
+        ],
+        "asserts": [
+          {
+            "text": "The parent sharpens the task from existing context.",
+            "polarity": "must"
+          },
+          {
+            "text": "No worker launches while task type or difficulty remains uncertain.",
+            "polarity": "must_not"
+          },
+          {
+            "text": "The parent does not ask the operator to classify routine routing uncertainty.",
+            "polarity": "must_not"
+          },
+          {
+            "text": "An expensive lead-derived model is not silently retained.",
+            "polarity": "must_not"
+          }
+        ]
+      }
+    },
+    {
+      "id": "DLG-005",
+      "title": "A clarified retry can proceed",
+      "tier": "medium",
+      "given": "The parent has enough context to make a clarified retry, or the operator has made a material decision.",
+      "when": "The parent performs the one clarified retry.",
+      "then": "The parent launches an appropriate worker and the task proceeds without carrying over an expensive lead-derived choice.",
+      "why": "A focused parent retry recovers useful delegation without silently retaining a costly model.",
+      "source": "supplied operator intent: Uncertain general task type or difficulty should return to parent for ONE clarified retry, never silently retain an expensive lead-derived model.",
+      "status": "approved",
+      "approved_at": "2026-11-06",
+      "comment": "auto: agent-owned",
+      "visual": {
+        "kind": "sequence",
+        "actors": [
+          {
+            "id": "parent",
+            "label": "Parent"
+          },
+          {
+            "id": "worker",
+            "label": "Worker"
+          }
+        ],
+        "setup": [
+          {
+            "actor": "parent",
+            "text": "The parent has sharpened the task from context or received a material decision."
+          }
+        ],
+        "steps": [
+          {
+            "from": "parent",
+            "to": "worker",
+            "text": "Retry routing once using the clarified task.",
+            "kind": "call"
+          },
+          {
+            "from": "worker",
+            "to": "parent",
+            "text": "Proceed with the clarified task.",
+            "kind": "return"
+          }
+        ],
+        "asserts": [
+          {
+            "text": "One clarified retry reaches an appropriate worker.",
+            "polarity": "must"
+          },
+          {
+            "text": "The clarified task proceeds with the worker choice.",
+            "polarity": "must"
+          },
+          {
+            "text": "The earlier expensive lead-derived choice is not carried into the retry.",
+            "polarity": "must_not"
+          }
+        ]
+      }
+    },
+    {
+      "id": "DLG-006",
+      "title": "Automatic chat-cycle selection is declined with guidance",
+      "tier": "medium",
+      "given": "An automatic job would select a Medium or slow chat-cycle role while the operator's chat model and defaults are already set.",
+      "when": "The automatic selector reaches that role choice.",
+      "then": "The selection is declined with guidance, and the operator's existing chat settings remain unchanged.",
+      "why": "Automatic work should not silently substitute a different chat-cycle role or take control of the operator's conversation settings.",
+      "source": "supplied operator intent: Automatic jobs do not use Medium/slow chat-cycle roles; preserve operator chat choices and explicit named-model reviews.",
+      "status": "approved",
+      "approved_at": "2026-11-06",
+      "comment": "auto: agent-owned",
+      "visual": {
+        "kind": "sequence",
+        "actors": [
+          {
+            "id": "automatic-job",
+            "label": "Automatic job"
+          },
+          {
+            "id": "parent",
+            "label": "Parent"
+          },
+          {
+            "id": "operator",
+            "label": "Operator"
+          }
+        ],
+        "setup": [
+          {
+            "actor": "operator",
+            "text": "The operator has chosen chat model and default settings."
+          }
+        ],
+        "steps": [
+          {
+            "from": "automatic-job",
+            "to": "parent",
+            "text": "Offer the Medium or slow chat-cycle role.",
+            "kind": "call"
+          },
+          {
+            "from": "parent",
+            "to": "automatic-job",
+            "text": "Decline the role and provide guidance instead of silently substituting it.",
+            "kind": "return"
+          },
+          {
+            "from": "parent",
+            "to": "operator",
+            "text": "Leave the operator's chat model and defaults unchanged.",
+            "kind": "return"
+          }
+        ],
+        "asserts": [
+          {
+            "text": "The automatic selection is declined with guidance.",
+            "polarity": "must"
+          },
+          {
+            "text": "The operator's existing chat model and defaults remain unchanged.",
+            "polarity": "must"
+          },
+          {
+            "text": "A different chat-cycle role is not silently substituted.",
+            "polarity": "must_not"
+          }
+        ]
+      }
+    },
+    {
+      "id": "DLG-007",
+      "title": "A deliberate named review remains allowed",
+      "tier": "medium",
+      "given": "The operator explicitly names a model for a review.",
+      "when": "The parent starts that review through deliberate named selection.",
+      "then": "The review runs with the operator's requested named model even though automatic jobs do not use Medium or slow chat-cycle roles.",
+      "why": "Deliberate named-model reviews remain under operator control while automatic role selection stays narrower.",
+      "source": "supplied operator intent: Automatic jobs do not use Medium/slow chat-cycle roles; preserve operator chat choices and explicit named-model reviews.",
+      "status": "approved",
+      "approved_at": "2026-11-06",
+      "comment": "auto: agent-owned",
+      "visual": {
+        "kind": "sequence",
+        "actors": [
+          {
+            "id": "operator",
+            "label": "Operator"
+          },
+          {
+            "id": "parent",
+            "label": "Parent"
+          },
+          {
+            "id": "reviewer",
+            "label": "Named reviewer"
+          }
+        ],
+        "setup": [
+          {
+            "actor": "operator",
+            "text": "The operator has explicitly named the model for a review."
+          }
+        ],
+        "steps": [
+          {
+            "from": "operator",
+            "to": "parent",
+            "text": "Request the review with the named model.",
+            "kind": "action"
+          },
+          {
+            "from": "parent",
+            "to": "reviewer",
+            "text": "Start the review with the operator's requested named model.",
+            "kind": "call"
+          },
+          {
+            "from": "reviewer",
+            "to": "parent",
+            "text": "Return the review result.",
+            "kind": "return"
+          }
+        ],
+        "asserts": [
+          {
+            "text": "The review runs with the operator's requested named model.",
+            "polarity": "must"
+          },
+          {
+            "text": "The deliberate named-model review remains an allowed path.",
+            "polarity": "must"
+          },
+          {
+            "text": "Automatic chat-cycle role restrictions do not block the deliberate named review.",
+            "polarity": "must_not"
+          }
+        ]
+      }
+    },
+    {
+      "id": "DLG-008",
+      "title": "Exhausted Codex follows ordinary selection",
+      "tier": "medium",
+      "given": "Codex has exhausted its normal worker quota and another eligible worker is available.",
+      "when": "The parent performs ordinary worker selection.",
+      "then": "The parent does not launch Codex and selects the eligible alternative under normal quota rules.",
+      "why": "Codex exhaustion should affect ordinary selection consistently instead of receiving an exemption.",
+      "source": "supplied operator intent: Remove existing Codex quota exemption so its workers use existing quota logic.",
+      "status": "approved",
+      "approved_at": "2026-11-06",
+      "comment": "auto: agent-owned",
+      "visual": {
+        "kind": "sequence",
+        "actors": [
+          {
+            "id": "parent",
+            "label": "Parent"
+          },
+          {
+            "id": "codex",
+            "label": "Codex worker"
+          },
+          {
+            "id": "alternative",
+            "label": "Eligible alternative"
+          }
+        ],
+        "setup": [
+          {
+            "actor": "parent",
+            "text": "Codex has no remaining normal worker quota, and another worker is eligible."
+          }
+        ],
+        "steps": [
+          {
+            "from": "parent",
+            "to": "codex",
+            "text": "Apply the ordinary quota check before launch.",
+            "kind": "call"
+          },
+          {
+            "from": "parent",
+            "to": "alternative",
+            "text": "Select the eligible alternative under the same ordinary rules.",
+            "kind": "call"
+          },
+          {
+            "from": "alternative",
+            "to": "parent",
+            "text": "Proceed with the delegated work.",
+            "kind": "return"
+          }
+        ],
+        "asserts": [
+          {
+            "text": "The eligible alternative is selected and proceeds with the work.",
+            "polarity": "must"
+          },
+          {
+            "text": "Codex is not launched after its normal quota is exhausted.",
+            "polarity": "must_not"
+          },
+          {
+            "text": "Codex does not receive a quota exemption.",
+            "polarity": "must_not"
+          }
+        ]
+      }
+    }
+  ]
+}
