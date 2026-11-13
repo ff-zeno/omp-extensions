@@ -54,7 +54,8 @@ CLONE="$PWD/.tmp/oh-my-pi-v$NEW"
    `bun --cwd="$CLONE/packages/coding-agent" test test/extensions-runner.test.ts test/task/structured-subagent.test.ts test/task/wire-schema.test.ts test/task/workpool.test.ts`
 7. Stage the whole tree, then regenerate the patch from the staged diff:
    `git -C "$CLONE" add -A`
-   `git -C "$CLONE" diff --cached > "$CORE/subagent-routing-v$NEW.patch"`
+   `git -C "$CLONE" diff --cached --binary > "$CORE/subagent-routing-v$NEW.patch"`
+   `--binary` is required: `packages/catalog/src/compat/rules.json` is a git binary file.
    Then remove the old patch file.
 8. Update the plugin `README.md` `## Requirements` line to the new OMP version.
 
@@ -145,11 +146,18 @@ Stock OMP records each running subagent's completion self-estimate (the `task.co
 
 - `packages/coding-agent/src/async/job-manager.ts` adds `taskJobProgressRecord` and `taskJobCompletionPercent`.
 - `packages/coding-agent/src/session/agent-session-types.ts` adds optional `completionPercent` to `AsyncJobSnapshotItem`.
-- `packages/coding-agent/src/session/agent-session.ts` fills `completionPercent` for running jobs in `getAsyncJobSnapshot`.
+- `packages/coding-agent/src/session/async-job-views.ts` fills `completionPercent` for running jobs in `jobSnapshotItem` (in `agent-session.ts` before 18.18).
 - `test/agent-session-async-delivery.test.ts` checks that the snapshot returns the job's own estimate when a batch reports several.
 
 The same change is proposed upstream as [can1357/oh-my-pi#15338](https://github.com/can1357/oh-my-pi/pull/15338).
 When a release contains it, drop these hunks when rebasing; `throughput` already ignores a missing field.
+
+## Carried change: Google Antigravity stays enabled
+
+OMP 18.18 pauses the `google-antigravity` provider with a `disabled "<reason>"` auth rule, because Google may restrict accounts that use Antigravity outside its own apps.
+The patch removes that line from `packages/catalog/src/compat/rules/auth/google-antigravity.kdl` and carries the regenerated `packages/catalog/src/compat/rules.json` (`bun scripts/compile-compat.ts` from `packages/catalog`).
+Anyone who installs this patch accepts that account risk.
+To drop it, leave both files at upstream when rebasing.
 
 ## Folding this patch into stock OMP instead
 
