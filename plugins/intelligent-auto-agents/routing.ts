@@ -98,6 +98,12 @@ export type PoolLimits = {
 	finalWindowMs: number;
 	/** Within this span of a weekly reset, weekly crowding at demoteAt is lifted. */
 	weeklyCrowdLiftMs: number;
+	/**
+	 * Fresh start of a window: within this span after its reset, a window with real usage below
+	 * freshWindowMaxUsed is exempt from the pace check, since elapsed time is still near zero.
+	 */
+	freshWindowMs: number;
+	freshWindowMaxUsed: number;
 	usageTimeoutMs: number;
 	maxReportAgeMs: number;
 	clockSkewMs: number;
@@ -346,6 +352,8 @@ function poolLimits(value: unknown): value is PoolLimits {
 		unit(value.burstPenalty) &&
 		positiveInteger(value.finalWindowMs, 86_400_000) &&
 		positiveInteger(value.weeklyCrowdLiftMs, 86_400_000) &&
+		positiveInteger(value.freshWindowMs, 86_400_000) &&
+		unit(value.freshWindowMaxUsed) &&
 		positiveInteger(value.usageTimeoutMs, 60_000) &&
 		positiveInteger(value.maxReportAgeMs, 86_400_000) &&
 		positiveInteger(value.clockSkewMs, 3_600_000) &&
@@ -939,6 +947,9 @@ export function rankPool(
 		let weeklySeen = false;
 		let weeklyAllFinal = true;
 		let weeklyAllCrowdLifted = true;
+		// Window kinds whose every sample is in its fresh start; those skip the pace check.
+		const freshKinds = new Set<WindowKind>();
+		const staleStartKinds = new Set<WindowKind>();
 		for (const report of memberReports) {
 			const samples = windowSamples(report, member.model.id);
 			const validKinds = new Set<WindowKind>();
@@ -970,8 +981,16 @@ export function rankPool(
 					1,
 					Math.max(0, 1 - ((sample.resetsAt as number) - nowMs) / sample.durationMs),
 				);
-				const sampleHeadroom = elapsed - adjustedUsed;
+				// Pace compares real usage with elapsed time. The burst penalty is excluded: just after a reset,
+				// elapsed is near zero, so in-flight dispatches alone would put an unused window behind pace.
+				const sampleHeadroom = elapsed - sample.usedFraction;
 				headroom[sample.kind] = Math.min(headroom[sample.kind] ?? Number.POSITIVE_INFINITY, sampleHeadroom);
+				const sinceReset = sample.durationMs - untilReset;
+				if (sinceReset <= limits.freshWindowMs && sample.usedFraction < limits.freshWindowMaxUsed) {
+					freshKinds.add(sample.kind);
+				} else {
+					staleStartKinds.add(sample.kind);
+				}
 			}
 			if (invalidKinds.size > 0) invalidRequired = true;
 			for (const kind of new Set([...requiredKinds, ...reportedKinds])) {
@@ -1020,12 +1039,16 @@ export function rankPool(
 					: member.maxShortUsed;
 		const shortOkay = shortCap === undefined || (used.short !== undefined && used.short < shortCap);
 		const headroomTolerance = 1e-9;
+		const weeklyFresh = freshKinds.has("weekly") && !staleStartKinds.has("weekly");
+		const monthlyFresh = freshKinds.has("monthly") && !staleStartKinds.has("monthly");
 		const weeklyOkay =
 			member.minWeeklyHeadroom === undefined ||
 			finalStretch ||
+			weeklyFresh ||
 			(headroom.weekly !== undefined && headroom.weekly + headroomTolerance >= member.minWeeklyHeadroom);
 		const monthlyOkay =
 			member.minMonthlyHeadroom === undefined ||
+			monthlyFresh ||
 			(headroom.monthly === undefined || headroom.monthly + headroomTolerance >= member.minMonthlyHeadroom);
 		if (!shortOkay || !weeklyOkay || !monthlyOkay) {
 			verdict.status = "below-pace";

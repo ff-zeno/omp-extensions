@@ -168,6 +168,8 @@
 		"burstPenalty": 0.01,
 		"finalWindowMs": 18000000,
 		"weeklyCrowdLiftMs": 43200000,
+		"freshWindowMs": 21600000,
+		"freshWindowMaxUsed": 0.03,
 		"usageTimeoutMs": 5000,
 		"maxReportAgeMs": 900000,
 		"clockSkewMs": 60000,

@@ -431,6 +431,38 @@ describe("pool ranking", () => {
 		expect(ranked.order).toEqual(["xai-oauth/grok-4.6", "openai-codex/gpt-5.6-luna"]);
 	});
 
+	test("keeps a freshly reset, unused window on pace while dispatches are in flight", () => {
+		// 30 minutes into the week, two in-flight dispatches add a 0.02 burst penalty to an unused window.
+		const ranked = rankPool(
+			[luna],
+			{ reports: [weeklyReport("openai-codex", 0, week - hour / 2)], credentialCounts: {} },
+			new Map([["openai-codex/gpt-5.6-luna", 0.02]]),
+			[],
+			pacedLimits,
+			Date.now(),
+		);
+		expect(ranked.verdicts["openai-codex/gpt-5.6-luna"]?.status).toBe("eligible");
+		expect(ranked.order).toEqual(["openai-codex/gpt-5.6-luna"]);
+	});
+
+	test("exempts the first 6 hours after a reset from the pace check while usage is under 3%", () => {
+		// One hour into the week, 2% used is ahead of linear pace (about 0.6% elapsed) but still a fresh start.
+		expect(lunaStatus(0.02, week - hour)).toBe("eligible");
+		// At 3% used the exemption ends and the pace check applies again. After 6 hours, under 3% used is
+		// already behind linear pace (6 hours is about 3.6% of a week), so the hand-off has no gap.
+		expect(lunaStatus(0.03, week - hour)).toBe("below-pace");
+		expect(lunaStatus(0.02, week - 7 * hour)).toBe("eligible");
+	});
+
+	test("ends the fresh-start exemption after 6 hours for a member that needs extra weekly headroom", () => {
+		const sonnet = member("anthropic", "claude-sonnet-5-5", { minWeeklyHeadroom: 0.1 });
+		const sonnetStatus = (used: number, untilResetMs: number) =>
+			rankPool([sonnet], { reports: [weeklyReport("anthropic", used, untilResetMs)], credentialCounts: {} }, new Map(), [], pacedLimits, Date.now())
+				.verdicts["anthropic/claude-sonnet-5-5"]?.status;
+		expect(sonnetStatus(0.02, week - 5 * hour)).toBe("eligible");
+		expect(sonnetStatus(0.02, week - 7 * hour)).toBe("below-pace");
+	});
+
 	test("lifts weekly crowding 12 hours before a weekly reset", () => {
 		expect(lunaStatus(0.85, 13 * hour)).toBe("crowded");
 		expect(lunaStatus(0.85, 11 * hour)).toBe("eligible");

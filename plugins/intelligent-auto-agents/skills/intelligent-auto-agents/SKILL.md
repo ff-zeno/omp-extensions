@@ -123,7 +123,8 @@ Sonnet is named literally with no role and never runs above low.
 Anthropic members are eligible while weekly headroom is at least 0.10 (`minWeeklyHeadroom` 0.1); Anthropic no longer reports a 5-hour window, so no member has a 5-hour gate.
 xAI (`@frontier-3`, Grok) and OpenAI (`openai-codex/gpt-5.6-luna` in mechanical and commit, `openai-codex/gpt-6.1-sol` in code and review) share one gate: `minWeeklyHeadroom` 0, so they are eligible while weekly usage is not ahead of the weekly pace.
 Neither has a monthly gate; both report only a 7-day window.
-Every provider's in-flight burst penalty counts against its weekly window.
+Every provider's in-flight burst penalty counts against its weekly window for crowding and skipping, but not for the pace (headroom) check, so a freshly reset window stays on pace while dispatches are in flight.
+Within 6 hours after a reset, a window with less than 3% real usage skips the pace check (`freshWindowMs`, `freshWindowMaxUsed`).
 Argon's gate is also `minWeeklyHeadroom` 0, read only from its own `gemini-argon-*` weekly bucket in Antigravity's report; the shared Gemini windows that Gemini 3.8 Flash spends do not gate Argon, and Argon's bucket does not gate other Gemini models. Gemini's 5-hour window is not gated.
 A gated member with no usage report, or a report that lacks a valid gated window, gets `no-usage` and is ranked last after crowded members; stale and partial reports still exclude.
 A window at or above `demoteAt` 0.8 crowds a member; at or above `skipAt` 0.95, or exhausted, it is skipped.

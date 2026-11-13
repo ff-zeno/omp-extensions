@@ -255,10 +255,12 @@ Quota checks are not a hard global dispatch cap. `plan-review` members are ungat
 `personas` controls the persona suggestion: `agents` lists the agents Jev suggests a persona for, `instructions` and `criteria` (one description per persona, `normal` and `brute`) go to Jev verbatim, and `maxDifficulty` caps Brute: a worker rated harder than this level, or not rated at all, gets Normal.
 
 A gated member whose provider has no usage report, or whose report lacks a valid gated window, gets status `no-usage` and is ranked last, after crowded members.
-Stale and partial reports still exclude a member.
+Below-pace, stale, and partial reports still exclude a member.
+The pace (headroom) check compares real usage with elapsed window time; in-flight burst penalties count toward crowding and skipping only, so a freshly reset window is not pushed behind pace by its own dispatches.
 No shipped member sets `minMonthlyHeadroom`.
 `poolLimits` holds the shared guardrails: `demoteAt`, `skipAt`, the per-dispatch `burstPenalty`, `burstPenaltyWindow` (which quota window a provider's in-flight burst penalty counts against, keyed by provider with a required `*` default; the shipped catalog sets `*` to `weekly`, because no gated provider reports a 5-hour window any more), `finalWindowMs`, `weeklyCrowdLiftMs`, usage timeout and maximum report age, clock-skew tolerance, the failure streak and duration for demotion, and `ignoreQuota` (provider ids that skip usage ranking).
 Within `weeklyCrowdLiftMs` of a weekly reset, weekly crowding at `demoteAt` is lifted.
+Within `freshWindowMs` (6 hours) after a reset, a window whose real usage is below `freshWindowMaxUsed` (3%) skips the pace check, because elapsed time is still near zero; all other gates still apply.
 Within `finalWindowMs` of a weekly reset, the weekly pace check and the weekly `skipAt` are lifted (only exhaustion still stops new work), burst penalties also count against the weekly window, and the short-window cap rises to `demoteAt`.
 Usage comes from the same provider reports as `/usage`. Antigravity is read through its Gemini counter, xAI through its aggregate credit pool, and Anthropic through its shared weekly windows (Anthropic no longer reports a 5-hour window). A member that sets `maxShortUsed` requires a 5-hour window, so a provider without one ranks that member as `no-usage`; no shipped member sets it. The plugin assumes `providers.antigravityEndpoint` is `auto`.
 
