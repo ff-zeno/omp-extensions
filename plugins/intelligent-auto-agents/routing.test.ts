@@ -445,7 +445,7 @@ describe("pool ranking", () => {
 		expect(ranked.order).toEqual(["openai-codex/gpt-5.6-luna"]);
 	});
 
-	test("exempts the first 6 hours after a reset from the pace check while usage is under 3%", () => {
+	test("counts the first 6 hours after a reset as on pace while usage is under 3%", () => {
 		// One hour into the week, 2% used is ahead of linear pace (about 0.6% elapsed) but still a fresh start.
 		expect(lunaStatus(0.02, week - hour)).toBe("eligible");
 		// At 3% used the exemption ends and the pace check applies again. After 6 hours, under 3% used is
@@ -454,13 +454,14 @@ describe("pool ranking", () => {
 		expect(lunaStatus(0.02, week - 7 * hour)).toBe("eligible");
 	});
 
-	test("ends the fresh-start exemption after 6 hours for a member that needs extra weekly headroom", () => {
+	test("a fresh start counts as on pace but does not waive a member's extra weekly headroom", () => {
 		const sonnet = member("anthropic", "claude-sonnet-5-5", { minWeeklyHeadroom: 0.1 });
 		const sonnetStatus = (used: number, untilResetMs: number) =>
 			rankPool([sonnet], { reports: [weeklyReport("anthropic", used, untilResetMs)], credentialCounts: {} }, new Map(), [], pacedLimits, Date.now())
 				.verdicts["anthropic/claude-sonnet-5-5"]?.status;
-		expect(sonnetStatus(0.02, week - 5 * hour)).toBe("eligible");
-		expect(sonnetStatus(0.02, week - 7 * hour)).toBe("below-pace");
+		// Anthropic keeps its 10% reserve for the main chat, so subagents stay off it early in the week.
+		expect(sonnetStatus(0, week - hour / 2)).toBe("below-pace");
+		expect(sonnetStatus(0.02, week - 5 * hour)).toBe("below-pace");
 	});
 
 	test("lifts weekly crowding 12 hours before a weekly reset", () => {
