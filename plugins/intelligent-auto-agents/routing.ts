@@ -1,9 +1,4 @@
-import {
-	resolveUsedFraction,
-	scopeAntigravityLimitsForModel,
-	type UsageLimit,
-	type UsageReport,
-} from "@oh-my-pi/pi-ai";
+import { resolveUsedFraction, type UsageLimit, type UsageReport } from "@oh-my-pi/pi-ai";
 
 /** Efforts Jev may assign, lowest to highest. */
 export const EFFORTS = ["low", "medium", "high", "xhigh", "max"] as const;
@@ -119,6 +114,20 @@ export type PoolLimits = {
 	ignoreQuota?: readonly string[];
 };
 
+export type ExperimentCandidate = { model: string; effort: Effort };
+export type ExperimentSlot = {
+	pools: string[];
+	difficulties: Difficulty[];
+	candidates: ExperimentCandidate[];
+};
+export type CatalogExperiment = {
+	name: string;
+	enabled: boolean;
+	endsAt: string;
+	endsAtMs: number;
+	slots: ExperimentSlot[];
+};
+
 export type Catalog = {
 	version: 9;
 	enabled: boolean;
@@ -156,6 +165,7 @@ export type Catalog = {
 	blockedDirectiveTargets: string[];
 	/** Directive names Jev may resolve through OMP roles or literal provider/model ids. */
 	directiveTargets: Record<string, string>;
+	experiment?: CatalogExperiment;
 };
 
 export type PlanningRoute = "autonomous-plan" | "discuss-with-user";
@@ -398,6 +408,64 @@ function assertModelSafeMap(
 	}
 }
 
+const EXPERIMENT_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
+
+function parseExperiment(
+	value: unknown,
+	pools: Record<string, PoolSpec>,
+	reviewOnly: Catalog["reviewOnly"],
+): CatalogExperiment {
+	if (
+		!record(value) ||
+		!text(value.name) ||
+		!EXPERIMENT_NAME.test(value.name) ||
+		typeof value.enabled !== "boolean" ||
+		typeof value.endsAt !== "string"
+	) {
+		throw new Error("Invalid auto-agents experiment");
+	}
+	const endsAtMs = Date.parse(value.endsAt);
+	if (!Number.isFinite(endsAtMs)) throw new Error("Invalid auto-agents experiment");
+	if (!Array.isArray(value.slots) || value.slots.length === 0) throw new Error("Invalid auto-agents experiment");
+	const seenPairs = new Set<string>();
+	const slots: ExperimentSlot[] = [];
+	for (const slot of value.slots) {
+		if (!record(slot) || !strings(slot.pools) || !unique(slot.pools) || !difficultyScope(slot.difficulties)) {
+			throw new Error("Invalid auto-agents experiment");
+		}
+		if (!Array.isArray(slot.candidates) || slot.candidates.length < 2) {
+			throw new Error("Invalid auto-agents experiment");
+		}
+		const candidates: ExperimentCandidate[] = [];
+		const models = new Set<string>();
+		for (const candidate of slot.candidates) {
+			if (!record(candidate) || !text(candidate.model) || !isEffort(candidate.effort)) {
+				throw new Error("Invalid auto-agents experiment");
+			}
+			if (models.has(candidate.model)) throw new Error("Invalid auto-agents experiment");
+			models.add(candidate.model);
+			candidates.push({ model: candidate.model, effort: candidate.effort });
+		}
+		for (const poolName of slot.pools) {
+			const pool = pools[poolName];
+			if (!pool) throw new Error(`Auto-agents experiment names unknown pool "${poolName}"`);
+			if (pool.excludePlanAuthors) throw new Error(`Auto-agents experiment names excluded pool "${poolName}"`);
+			if (!reviewOnly.pools.includes(poolName)) {
+				for (const candidate of candidates) {
+					assertWorkerSafeModel(reviewOnly, candidate.model, "experiment");
+				}
+			}
+			for (const difficulty of slot.difficulties) {
+				const key = `${poolName}/${difficulty}`;
+				if (seenPairs.has(key)) throw new Error(`Auto-agents experiment repeats slot ${key}`);
+				seenPairs.add(key);
+			}
+		}
+		slots.push({ pools: slot.pools, difficulties: slot.difficulties, candidates });
+	}
+	return { name: value.name, enabled: value.enabled, endsAt: value.endsAt, endsAtMs, slots };
+}
+
 export function parseCatalog(value: unknown): Catalog {
 	if (
 		!record(value) ||
@@ -516,6 +584,8 @@ export function parseCatalog(value: unknown): Catalog {
 
 	assertModelSafeMap(value as Record<string, unknown>, pools, taskTypes, reviewOnly, value.blockedDirectiveTargets);
 
+	const experiment = value.experiment === undefined ? undefined : parseExperiment(value.experiment, pools, reviewOnly);
+
 	return {
 		version: 9,
 		enabled: value.enabled,
@@ -562,8 +632,31 @@ export function parseCatalog(value: unknown): Catalog {
 		},
 		blockedDirectiveTargets: value.blockedDirectiveTargets,
 		directiveTargets: directives,
+		...(experiment ? { experiment } : {}),
 	};
 }
+
+/** Active split-test slot for this pool and difficulty, or undefined when the test is off or ended. */
+export function activeExperimentSlot(
+	catalog: Catalog,
+	pool: string,
+	difficulty: Difficulty,
+	nowMs: number,
+): ExperimentSlot | undefined {
+	const experiment = catalog.experiment;
+	if (!experiment || !experiment.enabled || nowMs >= experiment.endsAtMs) return undefined;
+	return experiment.slots.find(slot => slot.pools.includes(pool) && slot.difficulties.includes(difficulty));
+}
+
+/** Rotate so index `counter mod n` is first. n is the candidate list length. */
+export function rotateCandidates<T>(candidates: readonly T[], counter: number): T[] {
+	const n = candidates.length;
+	if (n === 0) return [];
+	const start = ((counter % n) + n) % n;
+	if (start === 0) return [...candidates];
+	return [...candidates.slice(start), ...candidates.slice(0, start)];
+}
+
 
 export type CatalogReloader = { get: () => Catalog };
 
@@ -813,19 +906,9 @@ function inferredWindowKind(limit: UsageLimit): WindowKind {
  * Convert provider-specific limits into the three pacing windows. Unknown or
  * incomplete durations remain absent so rankPool can treat them as no usage.
  */
-export function windowSamples(report: UsageReport, modelId?: string): WindowSample[] {
+export function windowSamples(report: UsageReport): WindowSample[] {
 	let limits: readonly UsageLimit[] = report.limits;
-	if (report.provider === "google-antigravity") {
-		limits = scopeAntigravityLimitsForModel(report, modelId ? { modelId } : undefined);
-		// Argon draws only on its own `gemini-argon-*` bucket, which upstream files
-		// under the shared Google counter; no other Gemini model draws on it.
-		const argonBucket = limits.filter(limit => limit.id.toLowerCase().includes(":gemini-argon-"));
-		if (modelId?.toLowerCase().includes("argon")) {
-			if (argonBucket.length > 0) limits = argonBucket;
-		} else {
-			limits = limits.filter(limit => !argonBucket.includes(limit));
-		}
-	} else if (report.provider === "xai-oauth") {
+	if (report.provider === "xai-oauth") {
 		limits = report.limits.filter(limit => limit.id.startsWith("xai-oauth:credits:"));
 	} else if (report.provider === "anthropic") {
 		limits = report.limits.filter(limit => limit.scope.shared === true);
@@ -897,7 +980,9 @@ export function rankPool(
 	demoted: ReadonlySet<string> | readonly string[],
 	limits: PoolLimits,
 	nowMs: number,
+	options?: { skipWithoutGates?: boolean },
 ): PoolRank {
+	const skipUngated = options?.skipWithoutGates === true;
 	const { reports, credentialCounts } = usageParts(usage);
 	const order: string[] = [];
 	const skipped: string[] = [];
@@ -949,22 +1034,25 @@ export function rankPool(
 		let weeklyAllFinal = true;
 		let weeklyAllCrowdLifted = true;
 		for (const report of memberReports) {
-			const samples = windowSamples(report, member.model.id);
+			const samples = windowSamples(report);
 			const validKinds = new Set<WindowKind>();
 			const invalidKinds = new Set<WindowKind>();
 			const reportedKinds = new Set<WindowKind>();
 			for (const sample of samples) {
-				if (!pacedKinds.has(sample.kind)) continue;
-				hasAnySample = true;
-				reportedKinds.add(sample.kind);
+				const paced = pacedKinds.has(sample.kind);
+				if (!paced && !skipUngated) continue;
+				if (paced) {
+					hasAnySample = true;
+					reportedKinds.add(sample.kind);
+				}
 				if (!sampleIsValid(sample, nowMs, limits.clockSkewMs)) {
-					invalidKinds.add(sample.kind);
+					if (paced) invalidKinds.add(sample.kind);
 					continue;
 				}
-				validKinds.add(sample.kind);
+				if (paced) validKinds.add(sample.kind);
 				const untilReset = (sample.resetsAt as number) - nowMs;
 				const finalWeekly = sample.kind === "weekly" && untilReset <= limits.finalWindowMs;
-				if (sample.kind === "weekly") {
+				if (paced && sample.kind === "weekly") {
 					weeklySeen = true;
 					if (!finalWeekly) weeklyAllFinal = false;
 					if (untilReset > limits.weeklyCrowdLiftMs) weeklyAllCrowdLifted = false;
@@ -974,6 +1062,7 @@ export function rankPool(
 				// Weekly quota left in the final stretch is lost at reset, so only a spent window stops new work there.
 				const spent = sample.exhausted || sample.usedFraction >= 1;
 				if (spent || (adjustedUsed >= limits.skipAt && !finalWeekly)) shouldSkip = true;
+				if (!paced) continue;
 				used[sample.kind] = Math.max(used[sample.kind] ?? Number.NEGATIVE_INFINITY, adjustedUsed);
 				const elapsed = Math.min(
 					1,

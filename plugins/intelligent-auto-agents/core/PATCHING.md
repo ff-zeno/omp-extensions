@@ -55,7 +55,7 @@ CLONE="$PWD/.tmp/oh-my-pi-v$NEW"
 7. Stage the whole tree, then regenerate the patch from the staged diff:
    `git -C "$CLONE" add -A`
    `git -C "$CLONE" diff --cached --binary > "$CORE/subagent-routing-v$NEW.patch"`
-   `--binary` is required: `packages/catalog/src/compat/rules.json` is a git binary file.
+   `--binary` is harmless while no patched file is binary; keep it so a future hunk that touches one still lands in the patch.
    Then remove the old patch file.
 8. Update the plugin `README.md` `## Requirements` line to the new OMP version.
 
@@ -152,12 +152,10 @@ Stock OMP records each running subagent's completion self-estimate (the `task.co
 The same change is proposed upstream as [can1357/oh-my-pi#15338](https://github.com/can1357/oh-my-pi/pull/15338).
 When a release contains it, drop these hunks when rebasing; `throughput` already ignores a missing field.
 
-## Carried change: Google Antigravity stays enabled
+## Dropped change: Google Antigravity stays enabled
 
-OMP 18.18 pauses the `google-antigravity` provider with a `disabled "<reason>"` auth rule, because Google may restrict accounts that use Antigravity outside its own apps.
-The patch removes that line from `packages/catalog/src/compat/rules/auth/google-antigravity.kdl` and carries the regenerated `packages/catalog/src/compat/rules.json` (`bun scripts/compile-compat.ts` from `packages/catalog`).
-Anyone who installs this patch accepts that account risk.
-To drop it, leave both files at upstream when rebasing.
+2026-11-16: the Antigravity hunk is dropped after the operator's account ban, and the provider stays paused as upstream ships it.
+The patch no longer touches `packages/catalog/src/compat/rules/auth/google-antigravity.kdl` or `packages/catalog/src/compat/rules.json`; leave both at upstream on every rebase.
 
 ## Folding this patch into stock OMP instead
 

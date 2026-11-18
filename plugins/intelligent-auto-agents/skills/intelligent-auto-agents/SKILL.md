@@ -94,44 +94,62 @@ Pinned agents keep their bound `modelRoles`; Jev sets only effort from the model
 
 Jev rates difficulty as Exact, Ordinary, Hard, or Critical according to the catalog ladder.
 A pool member scoped with `difficulties` serves only those levels.
-The `mechanical`, `commit`, `code`, and `review` pools list one member per provider per difficulty, tried Anthropic, then xAI, then OpenAI, because Haiku, Sonnet, and Opus share one Anthropic quota, so rolling over inside a provider buys nothing.
-The `mechanical` and `commit` pools fall back to `deepinfra/deepseek-ai/DeepSeek-V4.1-Flash-1017` low when every member is quota-skipped. The `code` and `review` pools use that same fallback at high.
-The `lead`, `plan`, and `security-review` task types share the `lead` pool: `@frontier-1` → `@frontier-2` → `@frontier-3` → `google-antigravity/gemini-4-argon`. Anthropic uses the same quota gates as other worker pools; the other members use weekly headroom 0. Opus keeps its model-map effort, clamped to high–xhigh for lead/security review and medium–xhigh for planning. Both frontier rollover members set `effortFrom: "@frontier-1"`; frontier-2 matches that effort, while frontier-3 sets `effortStep: 1` for one level higher, capped at xhigh. Argon uses its own map (low, medium, high, high) under the same clamp. Members do not pin effort. Remaining eligible members stay in the provider-failure retry chain. The all-skipped fallback is `deepinfra/deepseek-ai/DeepSeek-V4.1-Flash-1017:high`.
+The `mechanical`, `commit`, and `code` pools list one member per provider per difficulty, tried OpenAI, then Anthropic, then xAI (Grok), because Haiku, Sonnet, and Opus share one Anthropic quota, so rolling over inside a provider buys nothing. The operator's decision of 2026-11-15 sets that order: use the OpenAI subscription first, conserve the Anthropic quota, and keep Grok last because it made the most mistakes in the session study. The `review` pool keeps its earlier order, Anthropic, then xAI, then OpenAI.
+Gemini 4 Argon was the last member of `code`, `review`, and `lead` until the operator's Google Antigravity account was banned and Argon was removed on 2026-11-16.
+The `mechanical` and `commit` pools fall back to `openscale/deepseek/deepseek-v4.1-flash-1017` low when every member is quota-skipped. The `code` and `review` pools use that same fallback at high.
+The `lead`, `plan`, and `security-review` task types share the `lead` pool: `@frontier-1` → `@frontier-2` → `@frontier-3`. Anthropic uses the same quota gates as other worker pools; the other members use weekly headroom 0. Opus keeps its model-map effort, clamped to high–xhigh for lead/security review and medium–xhigh for planning. Both frontier rollover members set `effortFrom: "@frontier-1"`; frontier-2 matches that effort, while frontier-3 sets `effortStep: 1` for one level higher, capped at xhigh. Members do not pin effort. Remaining eligible members stay in the provider-failure retry chain. The all-skipped fallback is `openscale/deepseek/deepseek-v4.1-flash-1017:high`.
+
+## Split test (temporary)
+
+Until 2026-12-15 each `mechanical`, `commit`, and `code` slot rotates the candidates below so every model sees a comparable share of jobs.
+Set `experiment.enabled` to `false` in `catalog.json` to switch the test off.
+The pool tables describe the quota rollover that returns after the test ends.
+
+| Pools | Difficulty | Candidates, in rotation order |
+|---|---|---|
+| `mechanical`, `commit` | exact, ordinary | Haiku low, Terra low, DeepSeek low, Grok low |
+| `mechanical`, `commit` | hard | Terra medium, Sonnet low, DeepSeek low, Grok high |
+| `code` | exact | Haiku low, Terra low, DeepSeek low, Grok low |
+| `code` | ordinary | Terra medium, Haiku medium, DeepSeek low, Sonnet low, Grok high |
+| `code` | hard | Terra high, Sonnet medium, DeepSeek high, Sol low, Grok high |
+| `mechanical`, `commit`, `code` | critical | Sol medium, Sonnet high, Terra high |
+
+| Pool | Difficulty | 1 OpenAI | 2 Anthropic | 3 xAI (Grok) |
+|---|---|---|---|---|
+| `mechanical` | exact | Luna xhigh | Haiku xhigh | Grok low |
+| `mechanical` | ordinary | Luna xhigh | Haiku xhigh | Grok low |
+| `mechanical` | hard | Terra medium | Sonnet low | Grok high |
+| `mechanical` | critical | Terra high | Opus medium | Grok high |
+| `commit` | exact | Luna xhigh | Haiku xhigh | Grok low |
+| `commit` | ordinary | Luna xhigh | Haiku xhigh | Grok low |
+| `commit` | hard | Terra medium | Opus low | Grok high |
+| `commit` | critical | Terra high | Opus medium | Grok xhigh |
+| `code` | exact | Luna max | Haiku xhigh | Grok low |
+| `code` | ordinary | Terra medium | Sonnet low | Grok high |
+| `code` | hard | Sol low | Opus medium | Grok high |
+| `code` | critical | Sol medium | Opus high | Grok xhigh |
+
+The `review` pool keeps its earlier order:
 
 | Pool | Difficulty | Anthropic | xAI (Grok) | OpenAI |
 |---|---|---|---|---|
-| `mechanical` | exact | Haiku xhigh | Grok low | Luna xhigh |
-| `mechanical` | ordinary | Haiku xhigh | Grok low | Luna xhigh |
-| `mechanical` | hard | Sonnet low | Grok high | Luna max |
-| `mechanical` | critical | Opus medium | Grok high | Luna max |
-| `commit` | exact | Haiku xhigh | Grok low | Luna xhigh |
-| `commit` | ordinary | Haiku xhigh | Grok low | Luna xhigh |
-| `commit` | hard | Opus low | Grok high | Luna max |
-| `commit` | critical | Opus medium | Grok xhigh | Luna max |
-| `code` | exact | Haiku xhigh | Grok low | Luna max |
-| `code` | ordinary | Sonnet low | Grok high | Luna max |
-| `code` | hard | Opus medium | Grok high | Sol low |
-| `code` | critical | Opus high | Grok xhigh | Sol medium |
 | `review` | exact | Sonnet low | Grok low | Sol low |
 | `review` | ordinary | Sonnet low | Grok high | Sol medium |
 | `review` | hard | Opus medium | Grok high | Sol high |
 | `review` | critical | Opus high | Grok xhigh | Sol xhigh |
 
-Gemini 4 Argon (`google-antigravity/gemini-4-argon`) is the last member, as frontier rollover: in `code` after Luna for ordinary (low) and after Sol for hard (medium) and critical (high); in `review` after Sol at every difficulty (low, medium, high, high); and in the `lead` pool (lead, plan, security-review) after Grok, where plan runs it at medium for exact and ordinary and high above, and lead and security review at high.
-
 Sonnet is named literally with no role and never runs above low.
 Anthropic members are eligible while weekly headroom is at least 0.10 (`minWeeklyHeadroom` 0.1); Anthropic no longer reports a 5-hour window, so no member has a 5-hour gate.
-xAI (`@frontier-3`, Grok) and OpenAI (`openai-codex/gpt-5.6-luna` in mechanical and commit, `openai-codex/gpt-6.1-sol` in code and review) share one gate: `minWeeklyHeadroom` 0, so they are eligible while weekly usage is not ahead of the weekly pace.
+xAI (`@frontier-3`, Grok) and OpenAI (`openai-codex/gpt-5.6-luna` for exact and ordinary mechanical and commit and exact code, `openai-codex/gpt-6.1-terra` for hard and critical mechanical and commit and ordinary code, and `openai-codex/gpt-6.2-sol` for hard and critical code and review) share one gate: `minWeeklyHeadroom` 0, so they are eligible while weekly usage is not ahead of the weekly pace.
 Neither has a monthly gate; both report only a 7-day window.
 Every provider's in-flight burst penalty counts against its weekly window for crowding and skipping, but not for the pace (headroom) check, so a freshly reset window stays on pace while dispatches are in flight.
 Within 6 hours after a reset, a window with less than 3% real usage counts as exactly on pace (`freshWindowMs`, `freshWindowMaxUsed`); Anthropic's 0.1 reserve still applies, so Anthropic subagents stay gated early in the week.
-Argon's gate is also `minWeeklyHeadroom` 0, read only from its own `gemini-argon-*` weekly bucket in Antigravity's report; the shared Gemini windows that Gemini 3.8 Flash spends do not gate Argon, and Argon's bucket does not gate other Gemini models. Gemini's 5-hour window is not gated.
 A gated member with no usage report, or a report that lacks a valid gated window, gets `no-usage` and is ranked last after crowded members; stale and partial reports still exclude.
 A window at or above `demoteAt` 0.8 crowds a member; at or above `skipAt` 0.95, or exhausted, it is skipped.
 Within 12 hours of a weekly reset, weekly crowding is lifted; within 5 hours, the weekly pace check and weekly `skipAt` are lifted (weekly exhaustion still stops new work), and Anthropic's short-window cap rises from 0.7 to `demoteAt` 0.8.
 Ungated members (the `plan-review` pool) have no usage-window gates; only failure demotion applies.
-Protected aliases (`@frontier-2`, `@slow2`, `@advisor`, `@manager`) are restricted to the `plan-review` and `lead` pools by `reviewOnly`; they remain rejected in ordinary worker pools. Literal Sol serves code and review; the lead pool uses role references, so role rebinding changes its models.
-`openai-codex/gpt-5.6-luna` is blocked as a `Directive:` target but serves the `mechanical` and `commit` pools; the `web` role also names it literally.
+Protected aliases (`@frontier-2`, `@slow2`, `@advisor`, `@manager`) are restricted to the `plan-review` and `lead` pools by `reviewOnly`; they remain rejected in ordinary worker pools. Literal Luna, Terra, and Sol serve the worker pools: Luna for exact and ordinary mechanical and commit and exact code, Terra for hard and critical mechanical and commit and ordinary code, and Sol for hard and critical code and review. The lead pool uses role references, so role rebinding changes its models.
+`openai-codex/gpt-5.6-luna` is blocked as a `Directive:` target but serves the `mechanical` and `commit` pools at exact and ordinary and the `code` pool at exact; the `web` role also names it literally.
 A planning request first passes the catalog readiness check.
 An autonomous planner is allowed only when requirements, target files, acceptance criteria, and technical constraints are concrete.
 Otherwise the parent should discuss the open choices with the user first.
@@ -148,7 +166,7 @@ plan:
     - model: anthropic/claude-opus-5-5
       effort: high
   reviews:
-    - model: openai-codex/gpt-6.1-sol
+    - model: openai-codex/gpt-6.2-sol
       kind: adversarial            # adversarial | peer | frontier
       verdict: changes-requested   # passed | changes-requested
 ---
@@ -160,7 +178,7 @@ A missing or unparsable document leaves the pool order unchanged.
 ## Media tasks
 
 Delegate image and video analysis to `task`; other agents keep their normal routing.
-Jev reads the brief and picks the `vision` task type (Gemini first, Claude Opus as backup) when the work is mainly looking at visual media.
+Jev reads the brief and picks the `vision` task type (Claude Opus first, `@lead` as backup) when the work is mainly looking at visual media.
 A code change that merely mentions an image or video stays on its normal task type.
 There is no keyword or file-extension detector; to force media routing, add `Directive: use vision` to the brief.
 

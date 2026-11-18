@@ -1,16 +1,17 @@
 // Routing runtime; loaded by index.ts only on OMP with subagent routing API v2.
 // Routing policy belongs here; OMP core owns dispatch and effort transport.
-import { NativeJudge, scopeAntigravityLimitsForModel, type UsageReport } from "@oh-my-pi/pi-ai";
-import * as PiAi from "@oh-my-pi/pi-ai";
+import { NativeJudge, type UsageReport } from "@oh-my-pi/pi-ai";
 import { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import { type ExtensionAPI, type ExtensionContext, getSupportedEfforts } from "@oh-my-pi/pi-coding-agent";
-import { readFileSync, statSync } from "node:fs";
+import { appendFileSync, mkdirSync, readFileSync, statSync } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import catalogData from "./catalog.json";
 import {
+	activeExperimentSlot,
 	capEffort,
+	type Catalog,
 	choose,
 	createCatalogReloader,
 	type Decision,
@@ -35,6 +36,7 @@ import {
 	type PoolVerdict,
 	preferPlanReviewMembers,
 	rankPool,
+	rotateCandidates,
 	RoutingAuthenticationError,
 	stepEffort,
 	taskTypeEffortVaries,
@@ -55,7 +57,15 @@ const catalogReloader = createCatalogReloader(
 	},
 	parseCatalog(catalogData),
 );
-let catalog = catalogReloader.get();
+let catalogOverride: Catalog | undefined;
+let experimentAgentDirOverride: string | undefined;
+const inProcessExperimentCounters = new Map<string, number>();
+
+function loadCatalog(): Catalog {
+	return catalogOverride ?? catalogReloader.get();
+}
+
+let catalog = loadCatalog();
 const STATE_ENTRY = "intelligent-auto-agents-state";
 /**
  * Persona suggestions shared with the session-persona plugin through a process-wide registry keyed
@@ -135,6 +145,60 @@ export function resetSpeedPoolStateForTests(): void {
 	poolDemotions.clear();
 	reservationSequence = 0;
 	inFlightPoolUsageReports = undefined;
+	catalogOverride = undefined;
+	experimentAgentDirOverride = undefined;
+	inProcessExperimentCounters.clear();
+}
+
+export function setCatalogForTests(next: Catalog | undefined): void {
+	catalogOverride = next;
+}
+
+export function setExperimentAgentDirForTests(dir: string | undefined): void {
+	experimentAgentDirOverride = dir;
+}
+
+function experimentAgentDir(): string {
+	if (experimentAgentDirOverride) return experimentAgentDirOverride;
+	const override = process.env.PI_CODING_AGENT_DIR;
+	if (override) return path.resolve(override);
+	return path.join(os.homedir(), process.env.PI_CONFIG_DIR || ".omp", "agent");
+}
+
+type ExperimentRouteReport = {
+	name: string;
+	slot: string;
+	rotation: number;
+	candidate?: string;
+	effort?: Effort;
+	unavailable: string[];
+	fellBack: boolean;
+};
+
+function advanceExperimentCounter(name: string, slot: string): number {
+	const key = `${name}/${slot}`;
+	const file = path.join(
+		experimentAgentDir(),
+		"intelligent-auto-agents",
+		"experiments",
+		name,
+		slot.replaceAll("/", "--"),
+	);
+	try {
+		mkdirSync(path.dirname(file), { recursive: true });
+		let size = 0;
+		try {
+			size = statSync(file).size;
+		} catch {
+			size = 0;
+		}
+		appendFileSync(file, "x");
+		return size;
+	} catch {
+		const next = inProcessExperimentCounters.get(key) ?? 0;
+		inProcessExperimentCounters.set(key, next + 1);
+		return next;
+	}
 }
 type PoolRouteReport = {
 	status?: string;
@@ -243,45 +307,9 @@ async function fetchPoolUsage(ctx: ExtensionContext, signal: AbortSignal | undef
 	return { reports, credentialCounts };
 }
 
-function antigravityCounterKey(modelId: string): string | undefined {
-	const exportsValue: unknown = PiAi;
-	if (!record(exportsValue)) return undefined;
-	const candidate = exportsValue.getAntigravityCounterKeyForModel;
-	if (typeof candidate !== "function") return undefined;
-	const counterKey = candidate(modelId);
-	return typeof counterKey === "string" && counterKey.length > 0 ? counterKey : undefined;
-}
-function googleCounterKey(report: UsageReport, modelId: string): string | undefined {
-	const counterKey = antigravityCounterKey(modelId);
-	if (counterKey) {
-		const prefix = `${report.provider}:${counterKey}:`.toLowerCase();
-		if (report.limits.some(limit => limit.id.toLowerCase().startsWith(prefix)))
-			return `${report.provider}:${counterKey}`;
-		const defaultPrefix = `${report.provider}:default:`.toLowerCase();
-		if (report.limits.some(limit => limit.id.toLowerCase().startsWith(defaultPrefix)))
-			return `${report.provider}:default`;
-		return undefined;
-	}
-	const limits = scopeAntigravityLimitsForModel(report, { modelId });
-	const first = limits.find(limit => limit.id.startsWith(`${report.provider}:`));
-	if (!first) return undefined;
-	const remainder = first.id.slice(report.provider.length + 1);
-	const key = remainder.split(":")[0];
-	return key.length > 0 ? `${report.provider}:${key}` : undefined;
-}
-
-function counterForModel(model: ModelRef, reports: readonly UsageReport[]): string | undefined {
+function counterForModel(model: ModelRef): string | undefined {
 	if (model.provider === "xai-oauth") return "xai-oauth:aggregate";
 	if (model.provider === "anthropic") return "anthropic:shared";
-	if (model.provider === "google-antigravity") {
-		for (const report of reports) {
-			if (report.provider !== model.provider) continue;
-			const counter = googleCounterKey(report, model.id);
-			if (counter) return counter;
-		}
-		const counterKey = antigravityCounterKey(model.id);
-		return counterKey ? `${model.provider}:${counterKey}` : undefined;
-	}
 	return `${model.provider}:${model.id}`;
 }
 
@@ -300,7 +328,6 @@ function reservationMatchesReport(reservation: PoolReservation, report: UsageRep
 	if (model.provider === "xai-oauth")
 		return reservation.counter === "xai-oauth:aggregate" && isAggregateCreditReport(report);
 	if (model.provider === "anthropic") return reservation.counter === "anthropic:shared";
-	if (model.provider === "google-antigravity") return googleCounterKey(report, model.id) === reservation.counter;
 	return false;
 }
 
@@ -346,7 +373,7 @@ function poolPenalties(members: readonly PoolMember[], usage: PoolUsage, nowMs: 
 	pruneReservations(usage.reports, usage.credentialCounts, nowMs);
 	const penalties = new Map<string, number>();
 	for (const member of members) {
-		const counter = member.counter ?? counterForModel(member.model, usage.reports);
+		const counter = member.counter ?? counterForModel(member.model);
 		if (counter === undefined) {
 			penalties.set(member.id, 0);
 			continue;
@@ -577,12 +604,12 @@ function readPlanProvenance(ctx: ExtensionContext, brief: string): PlanProvenanc
 }
 
 export function register(pi: ExtensionAPI): void {
-	catalog = catalogReloader.get();
+	catalog = loadCatalog();
 	let enabled = catalog.enabled;
 	let lastLine: string | undefined;
 
 	function restore(ctx: ExtensionContext): void {
-		catalog = catalogReloader.get();
+		catalog = loadCatalog();
 		enabled = catalog.enabled;
 		lastLine = undefined;
 		for (const entry of ctx.sessionManager.getBranch()) {
@@ -668,6 +695,7 @@ export function register(pi: ExtensionAPI): void {
 			backups?: Array<{ slot: string; model: string; thinking: string }>;
 			rollover?: { from: string; to: string };
 			pool?: PoolRouteReport;
+			experiment?: ExperimentRouteReport;
 			/** Persona handed to session-persona after the catalog ceiling; overrides Jev's raw pick. */
 			persona?: Persona;
 		},
@@ -702,7 +730,8 @@ export function register(pi: ExtensionAPI): void {
 					: route.pool?.active
 						? ` · pool ${route.pool.active}`
 						: "";
-			lastLine = `${routingLabel(ctx)}: ${agent}: ${slot ?? "effort"}${target}${difficulty}${confidence}${source}${backup}${rollover}${pool}${persona} · ${latency}${usage}`;
+			const split = route.experiment ? ` · split test ${route.experiment.slot}` : "";
+			lastLine = `${routingLabel(ctx)}: ${agent}: ${slot ?? "effort"}${target}${difficulty}${confidence}${source}${backup}${rollover}${pool}${split}${persona} · ${latency}${usage}`;
 			return lastLine;
 		}
 		const reason = decision.reason.replaceAll("-", " ");
@@ -722,7 +751,7 @@ export function register(pi: ExtensionAPI): void {
 	pi.registerCommand("auto-agents", {
 		description: "Show routing status or set on/off for this session; never changes the chat model",
 		handler: async (args, ctx) => {
-			catalog = catalogReloader.get();
+			catalog = loadCatalog();
 			const action = args.trim();
 			if (action === "on" || action === "off") {
 				enabled = action === "on";
@@ -740,7 +769,7 @@ export function register(pi: ExtensionAPI): void {
 	});
 
 	pi.on("before_subagent_spawn", async (event, ctx) => {
-		catalog = catalogReloader.get();
+		catalog = loadCatalog();
 		let readinessUsage: UsageSummary | undefined;
 		if (catalog.planningReadiness.agents.includes(event.agent) && ctx.agent.kind === "main") {
 			const { result: readiness, latencyMs } = await withJevActivity(ctx, "checking planning readiness", () =>
@@ -953,6 +982,7 @@ export function register(pi: ExtensionAPI): void {
 		const attempts: RouteOption[] = [];
 		let poolMembers: PoolMember[] = [];
 		let poolRoute: PoolRouteReport | undefined;
+		let experimentRoute: ExperimentRouteReport | undefined;
 		let planNote = "";
 		const optionForModel = (spec: string, range: EffortRange | undefined, pinnedEffort?: Effort): RouteOption | undefined => {
 			const model = resolveModel(spec);
@@ -974,13 +1004,80 @@ export function register(pi: ExtensionAPI): void {
 			const taskType = catalog.taskTypes[taskTypeName as string];
 			if (taskType.pool) {
 				const pool = catalog.pools[taskType.pool];
+				const experimentNow = Date.now();
+				const experimentSlot = activeExperimentSlot(catalog, taskType.pool, difficulty, experimentNow);
+				if (experimentSlot && catalog.experiment) {
+					const experimentName = catalog.experiment.name;
+					const slotKey = `${taskType.pool}/${difficulty}`;
+					const candidateMembers: PoolMember[] = experimentSlot.candidates.flatMap(candidate => {
+						const model = resolveModel(candidate.model);
+						if (!model) return [];
+						const counter = counterForModel(model);
+						return [
+							{
+								id: `${model.provider}/${model.id}`,
+								model,
+								effort: candidate.effort,
+								...(counter !== undefined ? { counter } : {}),
+								penaltyKind:
+									catalog.poolLimits.burstPenaltyWindow[model.provider] ??
+									catalog.poolLimits.burstPenaltyWindow["*"],
+							} satisfies PoolMember,
+						];
+					});
+					const usage = await fetchPoolUsage(ctx, event.signal);
+					const rank = usage
+						? rankPool(
+								candidateMembers,
+								usage,
+								poolPenalties(candidateMembers, usage, experimentNow),
+								activeDemotions(experimentNow),
+								catalog.poolLimits,
+								experimentNow,
+								{ skipWithoutGates: true },
+							)
+						: undefined;
+					const unavailableIds = new Set([...(rank?.skipped ?? []), ...(rank?.demoted ?? [])]);
+					const rotation = advanceExperimentCounter(experimentName, slotKey);
+					const unavailable = candidateMembers
+						.filter(member => unavailableIds.has(member.id))
+						.map(member => member.id);
+					const rotated = rotateCandidates(candidateMembers, rotation).filter(
+						member => !unavailableIds.has(member.id),
+					);
+					experimentRoute = {
+						name: experimentName,
+						slot: slotKey,
+						rotation,
+						unavailable,
+						fellBack: rotated.length === 0,
+					};
+					if (rotated.length > 0) {
+						poolMembers = candidateMembers;
+						poolRoute = rank
+							? { order: [], skipped: rank.skipped, demoted: rank.demoted, verdicts: rank.verdicts }
+							: { status: "no-usage" };
+						for (const member of rotated) {
+							const modelId = `${member.model.provider}/${member.model.id}`;
+							const supported = getSupportedEfforts(member.model);
+							const effort = member.effort ? fitEffort(member.effort, supported) : undefined;
+							if (effort) pushUnique({ slot: member.id, model: member.model, exact: modelId, effort });
+						}
+						if (!attempts.length) {
+							experimentRoute = { ...experimentRoute, fellBack: true };
+							poolMembers = [];
+							poolRoute = undefined;
+						}
+					}
+				}
+				if (!attempts.length) {
 				poolMembers = pool.members.flatMap(spec => {
 					const model = resolveModel(spec.model);
 					if (!model) return [];
 					const effortBase = spec.effortFrom === undefined ? undefined :
 						optionForModel(spec.effortFrom, taskType.effort)?.effort;
 					if (spec.effortFrom !== undefined && effortBase === undefined) return [];
-					const counter = counterForModel(model, []);
+					const counter = counterForModel(model);
 					return [
 						{
 							id: spec.id ?? `${model.provider}/${model.id}`,
@@ -1042,6 +1139,7 @@ export function register(pi: ExtensionAPI): void {
 					if (effort) pushUnique({ slot: id, model: member.model, exact: modelId, effort });
 				}
 				if (!attempts.length) pushUnique(optionForModel(pool.fallback.model, taskType.effort, pool.fallback.effort));
+				}
 			} else if (taskType.model) {
 				pushUnique(optionForModel(taskType.model, taskType.effort));
 				for (const backup of taskType.backups ?? []) pushUnique(optionForModel(backup, taskType.effort));
@@ -1050,7 +1148,13 @@ export function register(pi: ExtensionAPI): void {
 			}
 		}
 		if (!attempts.length) {
-			reportDecision(ctx, decision, event.agent, personaRoute, latencyMs);
+			reportDecision(
+				ctx,
+				decision,
+				event.agent,
+				{ ...personaRoute, ...(experimentRoute ? { experiment: experimentRoute } : {}) },
+				latencyMs,
+			);
 			return;
 		}
 		const firstUnblocked = selectorSuppressed(ctx, attempts[0].model, attempts[0].effort)
@@ -1060,13 +1164,20 @@ export function register(pi: ExtensionAPI): void {
 		const active = attempts[firstUnblocked];
 		const rest = rolledOver ? attempts.slice(firstUnblocked + 1) : attempts.slice(1);
 		const model = [active.exact, ...rest.map(option => `${option.exact}:${option.effort}`)];
+		if (experimentRoute && !experimentRoute.fellBack) {
+			experimentRoute = {
+				...experimentRoute,
+				candidate: active.exact,
+				...(active.effort ? { effort: active.effort } : {}),
+			};
+		}
 		if (poolRoute) {
 			poolRoute.active = active.exact;
 			poolRoute.order = attempts.map(option => option.exact);
 		}
 		const activePoolMember = poolMembers.find(member => `${member.model.provider}/${member.model.id}` === active.exact);
 		if (activePoolMember) {
-			const counter = activePoolMember.counter ?? counterForModel(activePoolMember.model, []);
+			const counter = activePoolMember.counter ?? counterForModel(activePoolMember.model);
 			if (counter !== undefined) reservationToken(event.agent, active.exact, counter, Date.now());
 		}
 		return {
@@ -1084,6 +1195,7 @@ export function register(pi: ExtensionAPI): void {
 						difficulty: decision.difficulty,
 						...(directive ? { directive: directive.span } : {}),
 						...(poolRoute ? { pool: poolRoute } : {}),
+						...(experimentRoute ? { experiment: experimentRoute } : {}),
 						...(rolledOver ? { rollover: { from: attempts[0].exact, to: active.slot } } : {}),
 						...personaRoute,
 					},

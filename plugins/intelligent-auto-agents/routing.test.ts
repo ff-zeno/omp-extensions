@@ -4,8 +4,6 @@ import type { Evaluate, PoolMember, Slot } from "./routing";
 
 mock.module("@oh-my-pi/pi-ai", () => ({
 	resolveUsedFraction: (limit: { amount: { usedFraction?: number; unit: string } }) => limit.amount.usedFraction,
-	scopeAntigravityLimitsForModel: (report: { limits: unknown[] }) => report.limits,
-	getAntigravityCounterKeyForModel: (modelId: string | undefined) => modelId,
 	NativeJudge: class {
 		judge = async () => ({ answers: {} });
 	},
@@ -30,6 +28,8 @@ const {
 	preferPlanReviewMembers,
 	windowSamples,
 	rankPool,
+	rotateCandidates,
+	activeExperimentSlot,
 	choose,
 	evaluatePlanningReadiness,
 } = await import("./routing");
@@ -137,12 +137,8 @@ describe("catalog v9", () => {
 		expect(() => parseCatalog(maxOnFallback)).toThrow("settings");
 
 		const maxOutsideSupports = clone();
-		(
-			(maxOutsideSupports.models as Record<string, Record<string, unknown>>)["google-antigravity/gemini-3.8-flash"] as Record<
-				string,
-				unknown
-			>
-		).maxEffort = "xhigh";
+		((maxOutsideSupports.models as Record<string, Record<string, unknown>>)["xai-oauth/grok-4.6"] as Record<string, unknown>)
+			.maxEffort = "max";
 		expect(() => parseCatalog(maxOutsideSupports)).toThrow("model map");
 
 		const missingInstructions = clone();
@@ -202,13 +198,14 @@ describe("catalog v9", () => {
 		const solPlanReview = clone();
 		(
 			((solPlanReview.pools as Record<string, Record<string, unknown>>)["plan-review"].members as Array<Record<string, unknown>>)[0]
-		).model = "openai-codex/gpt-6.1-sol";
+		).model = "openai-codex/gpt-6.2-sol";
 		expect(() => parseCatalog(solPlanReview)).not.toThrow();
 
 		// The fixed pools are not required; only task-type pool references must resolve.
 		const noFixedPools = clone();
 		delete (noFixedPools.pools as Record<string, unknown>)["mechanical"];
 		(noFixedPools.taskTypes as Record<string, Record<string, unknown>>).mechanical.pool = "code";
+		delete noFixedPools.experiment;
 		expect(() => parseCatalog(noFixedPools)).not.toThrow();
 	});
 
@@ -221,6 +218,132 @@ describe("catalog v9", () => {
 			const invalid = structuredClone(catalogData);
 			Object.assign(invalid.pools.lead.members[1], policy);
 			expect(() => parseCatalog(invalid)).toThrow("Invalid auto-agents pool");
+		}
+	});
+});
+
+describe("split-test experiment", () => {
+	const clone = (): Record<string, unknown> => structuredClone(catalogData) as Record<string, unknown>;
+	const candidates = [
+		{ model: "openai-codex/gpt-6.1-terra", effort: "high" },
+		{ model: "anthropic/claude-sonnet-5-5", effort: "medium" },
+	];
+	const experimentBlock = (overrides: Record<string, unknown> = {}) => ({
+		name: "worker-split-2026-11",
+		enabled: true,
+		endsAt: "2026-12-15T00:00:00Z",
+		slots: [{ pools: ["code"], difficulties: ["hard"], candidates }],
+		...overrides,
+	});
+	const withExperiment = (overrides: Record<string, unknown> = {}) => {
+		const next = clone();
+		next.experiment = experimentBlock(overrides);
+		return next;
+	};
+
+	test("parses a valid experiment block", () => {
+		const parsed = parseCatalog(withExperiment());
+		expect(parsed.experiment?.name).toBe("worker-split-2026-11");
+		expect(parsed.experiment?.enabled).toBe(true);
+		expect(parsed.experiment?.slots).toHaveLength(1);
+	});
+
+	test("rejects each invalid experiment block", () => {
+		expect(() => parseCatalog(withExperiment({ name: "worker split" }))).toThrow("experiment");
+		expect(() => parseCatalog(withExperiment({ name: "a/b" }))).toThrow("experiment");
+		expect(() => parseCatalog(withExperiment({ enabled: "yes" }))).toThrow("experiment");
+		expect(() => parseCatalog(withExperiment({ endsAt: "not-a-date" }))).toThrow("experiment");
+		expect(() => parseCatalog(withExperiment({ slots: [{ pools: ["missing"], difficulties: ["hard"], candidates }] }))).toThrow(
+			"unknown pool",
+		);
+		expect(() =>
+			parseCatalog(withExperiment({ slots: [{ pools: ["plan-review"], difficulties: ["hard"], candidates }] })),
+		).toThrow("excluded pool");
+		expect(() =>
+			parseCatalog(
+				withExperiment({
+					slots: [
+						{ pools: ["code"], difficulties: ["hard"], candidates },
+						{ pools: ["code"], difficulties: ["hard"], candidates },
+					],
+				}),
+			),
+		).toThrow("repeats slot");
+		expect(() =>
+			parseCatalog(withExperiment({ slots: [{ pools: ["code"], difficulties: ["hard"], candidates: [candidates[0]] }] })),
+		).toThrow("experiment");
+		expect(() =>
+			parseCatalog(
+				withExperiment({
+					slots: [{ pools: ["code"], difficulties: ["hard"], candidates: [candidates[0], candidates[0]] }],
+				}),
+			),
+		).toThrow("experiment");
+		expect(() =>
+			parseCatalog(
+				withExperiment({
+					slots: [
+						{
+							pools: ["code"],
+							difficulties: ["hard"],
+							candidates: [{ model: "openai-codex/gpt-6.1-terra" }, candidates[1]],
+						},
+					],
+				}),
+			),
+		).toThrow("experiment");
+		expect(() =>
+			parseCatalog(
+				withExperiment({
+					slots: [
+						{
+							pools: ["code"],
+							difficulties: ["hard"],
+							candidates: [
+								{ model: "@frontier-2", effort: "low" },
+								{ model: "openai-codex/gpt-6.1-terra", effort: "high" },
+							],
+						},
+					],
+				}),
+			),
+		).toThrow("cannot take worker work");
+	});
+
+	test("activeExperimentSlot follows enabled, endsAt, and listed slots", () => {
+		const parsed = parseCatalog(withExperiment());
+		const beforeEnd = Date.parse("2026-12-14T00:00:00Z");
+		const afterEnd = Date.parse("2026-12-15T00:00:00Z");
+		expect(activeExperimentSlot(parsed, "code", "hard", beforeEnd)?.candidates).toEqual(candidates);
+		expect(activeExperimentSlot(parsed, "code", "ordinary", beforeEnd)).toBeUndefined();
+		expect(activeExperimentSlot(parsed, "lead", "hard", beforeEnd)).toBeUndefined();
+		expect(activeExperimentSlot(parsed, "code", "hard", afterEnd)).toBeUndefined();
+		const disabled = parseCatalog(withExperiment({ enabled: false }));
+		expect(activeExperimentSlot(disabled, "code", "hard", beforeEnd)).toBeUndefined();
+		const none = clone();
+		delete none.experiment;
+		expect(activeExperimentSlot(parseCatalog(none), "code", "hard", beforeEnd)).toBeUndefined();
+	});
+
+	test("rotateCandidates starts at counter mod n", () => {
+		const items = ["a", "b", "c", "d"];
+		expect(rotateCandidates(items, 0)).toEqual(["a", "b", "c", "d"]);
+		expect(rotateCandidates(items, 1)).toEqual(["b", "c", "d", "a"]);
+		expect(rotateCandidates(items, 4)).toEqual(["a", "b", "c", "d"]);
+		expect(rotateCandidates(items, -1)).toEqual(["d", "a", "b", "c"]);
+		expect(rotateCandidates([], 3)).toEqual([]);
+	});
+
+	test("the shipped catalog experiment lists a candidate set for every declared slot", () => {
+		const parsed = parseCatalog(catalogData);
+		expect(parsed.experiment).toBeDefined();
+		const beforeEnd = Date.parse(parsed.experiment!.endsAt) - 1;
+		for (const slot of parsed.experiment!.slots) {
+			for (const pool of slot.pools) {
+				for (const difficulty of slot.difficulties) {
+					expect(activeExperimentSlot(parsed, pool, difficulty, beforeEnd)?.candidates).toEqual(slot.candidates);
+				}
+			}
 		}
 	});
 });
@@ -317,7 +440,7 @@ describe("plan provenance", () => {
 });
 
 describe("plan-review author exclusion", () => {
-	const members = [member("openai-codex", "gpt-6.1-sol"), member("anthropic", "claude-opus-5-5"), member("xai-oauth", "grok-4.6")];
+	const members = [member("openai-codex", "gpt-6.2-sol"), member("anthropic", "claude-opus-5-5"), member("xai-oauth", "grok-4.6")];
 
 	test("drops authors and prefers models that have not reviewed", () => {
 		const order = preferPlanReviewMembers(members, {
@@ -326,7 +449,7 @@ describe("plan-review author exclusion", () => {
 		});
 		expect(order.excluded).toEqual(["xai-oauth/grok-4.6"]);
 		expect(order.members.map(m => `${m.model.provider}/${m.model.id}`)).toEqual([
-			"openai-codex/gpt-6.1-sol",
+			"openai-codex/gpt-6.2-sol",
 			"anthropic/claude-opus-5-5",
 		]);
 		expect(order.unknown).toBe(false);
@@ -335,10 +458,10 @@ describe("plan-review author exclusion", () => {
 	test("reuses the first non-author when every non-author has reviewed", () => {
 		const order = preferPlanReviewMembers(members, {
 			authors: ["xai-oauth/grok-4.6"],
-			reviews: ["openai-codex/gpt-6.1-sol", "anthropic/claude-opus-5-5"],
+			reviews: ["openai-codex/gpt-6.2-sol", "anthropic/claude-opus-5-5"],
 		});
 		expect(order.members.map(m => `${m.model.provider}/${m.model.id}`)).toEqual([
-			"openai-codex/gpt-6.1-sol",
+			"openai-codex/gpt-6.2-sol",
 			"anthropic/claude-opus-5-5",
 		]);
 	});
@@ -481,44 +604,6 @@ describe("pool ranking", () => {
 		expect(samples.every(sample => sample.usedFraction === 0.2)).toBe(true);
 	});
 
-	test("gates Argon on its own Antigravity bucket and other Gemini models on the shared ones", () => {
-		const provider = "google-antigravity";
-		const weekly = 7 * 24 * 60 * 60 * 1000;
-		const now = Date.now();
-		const limit = (bucket: string, durationMs: number, usedFraction: number) => ({
-			id: `${provider}:google:default:${bucket}`,
-			label: bucket,
-			scope: { provider },
-			window: { id: bucket, label: bucket, durationMs, resetsAt: now + durationMs * 0.8 },
-			amount: { unit: "percent", usedFraction },
-			status: usedFraction >= 1 ? "exhausted" : "ok",
-		});
-		const status = (argonUsed: number, geminiUsed: number) => {
-			const members = [
-				member(provider, "gemini-4-argon", { minWeeklyHeadroom: 0 }),
-				member(provider, "gemini-3.1-pro-high", { minWeeklyHeadroom: 0 }),
-			];
-			const usage = {
-				reports: [
-					{
-						provider,
-						fetchedAt: now,
-						limits: [
-							limit("gemini-argon-wtu-weekly", weekly, argonUsed),
-							limit("gemini-weekly", weekly, geminiUsed),
-							limit("gemini-5h", 5 * 60 * 60 * 1000, geminiUsed),
-						],
-					},
-				] as never,
-				credentialCounts: {},
-			};
-			const { verdicts } = rankPool(members, usage, new Map(), [], pacedLimits, now);
-			return [verdicts[`${provider}/gemini-4-argon`]?.status, verdicts[`${provider}/gemini-3.1-pro-high`]?.status];
-		};
-		expect(status(1, 0.1)).toEqual(["skipped", "eligible"]);
-		expect(status(0.1, 1)).toEqual(["eligible", "skipped"]);
-	});
-
 	test("picks the burst-penalty window from the catalog", () => {
 		const provider = "acme";
 		const target = member(provider, "model", { maxShortUsed: 0.9, minWeeklyHeadroom: 0, penaltyKind: undefined });
@@ -564,6 +649,15 @@ describe("pool ranking", () => {
 		);
 		expect(ranked.verdicts["openai-codex/gpt-5.6-luna"]?.status).toBe("demoted");
 		expect(ranked.order).not.toContain("openai-codex/gpt-5.6-luna");
+	});
+
+	test("skipWithoutGates skips a spent window on members with no headroom thresholds", () => {
+		const ungated = member("openai-codex", "gpt-6.1-terra");
+		const usage = { reports: [report("openai-codex", 0.99)], credentialCounts: {} };
+		const open = rankPool([ungated], usage, new Map(), [], pacedLimits, Date.now());
+		expect(open.verdicts[ungated.id]?.status).toBe("eligible");
+		const skipped = rankPool([ungated], usage, new Map(), [], pacedLimits, Date.now(), { skipWithoutGates: true });
+		expect(skipped.skipped).toContain(ungated.id);
 	});
 });
 

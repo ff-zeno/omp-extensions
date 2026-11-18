@@ -63,7 +63,20 @@
 			"hard": "high",
 			"critical": "xhigh"
 		},
-		"openai-codex/gpt-6.1-sol": {
+		"openai-codex/gpt-6.2-sol": {
+			"supports": [
+				"low",
+				"medium",
+				"high",
+				"xhigh",
+				"max"
+			],
+			"exact": "low",
+			"ordinary": "medium",
+			"hard": "high",
+			"critical": "xhigh"
+		},
+		"openai-codex/gpt-6.1-terra": {
 			"supports": [
 				"low",
 				"medium",
@@ -117,29 +130,6 @@
 			"hard": "low",
 			"critical": "low"
 		},
-		"google-antigravity/gemini-3.8-flash": {
-			"supports": [
-				"minimal",
-				"low",
-				"medium",
-				"high"
-			],
-			"exact": "low",
-			"ordinary": "high",
-			"hard": "high",
-			"critical": "high"
-		},
-		"google-antigravity/gemini-4-argon": {
-			"supports": [
-				"low",
-				"medium",
-				"high"
-			],
-			"exact": "low",
-			"ordinary": "medium",
-			"hard": "high",
-			"critical": "high"
-		},
 		"*": {
 			"exact": "low",
 			"ordinary": "medium",
@@ -183,6 +173,15 @@
 		"mechanical": {
 			"members": [
 				{
+					"model": "openai-codex/gpt-5.6-luna",
+					"effort": "xhigh",
+					"difficulties": [
+						"exact",
+						"ordinary"
+					],
+					"minWeeklyHeadroom": 0
+				},
+				{
 					"model": "@fast",
 					"effort": "xhigh",
 					"difficulties": [
@@ -201,11 +200,10 @@
 					"minWeeklyHeadroom": 0
 				},
 				{
-					"model": "openai-codex/gpt-5.6-luna",
-					"effort": "xhigh",
+					"model": "openai-codex/gpt-6.1-terra",
+					"effort": "medium",
 					"difficulties": [
-						"exact",
-						"ordinary"
+						"hard"
 					],
 					"minWeeklyHeadroom": 0
 				},
@@ -226,10 +224,10 @@
 					"minWeeklyHeadroom": 0
 				},
 				{
-					"model": "openai-codex/gpt-5.6-luna",
-					"effort": "max",
+					"model": "openai-codex/gpt-6.1-terra",
+					"effort": "high",
 					"difficulties": [
-						"hard"
+						"critical"
 					],
 					"minWeeklyHeadroom": 0
 				},
@@ -248,24 +246,25 @@
 						"critical"
 					],
 					"minWeeklyHeadroom": 0
-				},
-				{
-					"model": "openai-codex/gpt-5.6-luna",
-					"effort": "max",
-					"difficulties": [
-						"critical"
-					],
-					"minWeeklyHeadroom": 0
 				}
 			],
 			"fallback": {
-				"model": "deepinfra/deepseek-ai/DeepSeek-V4.1-Flash-1017",
+				"model": "openscale/deepseek/deepseek-v4.1-flash-1017",
 				"effort": "low"
 			}
 		},
 		"commit": {
 			"members": [
 				{
+					"model": "openai-codex/gpt-5.6-luna",
+					"effort": "xhigh",
+					"difficulties": [
+						"exact",
+						"ordinary"
+					],
+					"minWeeklyHeadroom": 0
+				},
+				{
 					"model": "@fast",
 					"effort": "xhigh",
 					"difficulties": [
@@ -284,11 +283,10 @@
 					"minWeeklyHeadroom": 0
 				},
 				{
-					"model": "openai-codex/gpt-5.6-luna",
-					"effort": "xhigh",
+					"model": "openai-codex/gpt-6.1-terra",
+					"effort": "medium",
 					"difficulties": [
-						"exact",
-						"ordinary"
+						"hard"
 					],
 					"minWeeklyHeadroom": 0
 				},
@@ -309,10 +307,10 @@
 					"minWeeklyHeadroom": 0
 				},
 				{
-					"model": "openai-codex/gpt-5.6-luna",
-					"effort": "max",
+					"model": "openai-codex/gpt-6.1-terra",
+					"effort": "high",
 					"difficulties": [
-						"hard"
+						"critical"
 					],
 					"minWeeklyHeadroom": 0
 				},
@@ -331,23 +329,23 @@
 						"critical"
 					],
 					"minWeeklyHeadroom": 0
-				},
-				{
-					"model": "openai-codex/gpt-5.6-luna",
-					"effort": "max",
-					"difficulties": [
-						"critical"
-					],
-					"minWeeklyHeadroom": 0
 				}
 			],
 			"fallback": {
-				"model": "deepinfra/deepseek-ai/DeepSeek-V4.1-Flash-1017",
+				"model": "openscale/deepseek/deepseek-v4.1-flash-1017",
 				"effort": "low"
 			}
 		},
 		"code": {
 			"members": [
+				{
+					"model": "openai-codex/gpt-5.6-luna",
+					"effort": "max",
+					"difficulties": [
+						"exact"
+					],
+					"minWeeklyHeadroom": 0
+				},
 				{
 					"model": "@fast",
 					"effort": "xhigh",
@@ -365,10 +363,10 @@
 					"minWeeklyHeadroom": 0
 				},
 				{
-					"model": "openai-codex/gpt-5.6-luna",
-					"effort": "max",
+					"model": "openai-codex/gpt-6.1-terra",
+					"effort": "medium",
 					"difficulties": [
-						"exact"
+						"ordinary"
 					],
 					"minWeeklyHeadroom": 0
 				},
@@ -389,18 +387,10 @@
 					"minWeeklyHeadroom": 0
 				},
 				{
-					"model": "openai-codex/gpt-5.6-luna",
-					"effort": "max",
-					"difficulties": [
-						"ordinary"
-					],
-					"minWeeklyHeadroom": 0
-				},
-				{
-					"model": "google-antigravity/gemini-4-argon",
+					"model": "openai-codex/gpt-6.2-sol",
 					"effort": "low",
 					"difficulties": [
-						"ordinary"
+						"hard"
 					],
 					"minWeeklyHeadroom": 0
 				},
@@ -421,18 +411,10 @@
 					"minWeeklyHeadroom": 0
 				},
 				{
-					"model": "openai-codex/gpt-6.1-sol",
-					"effort": "low",
-					"difficulties": [
-						"hard"
-					],
-					"minWeeklyHeadroom": 0
-				},
-				{
-					"model": "google-antigravity/gemini-4-argon",
+					"model": "openai-codex/gpt-6.2-sol",
 					"effort": "medium",
 					"difficulties": [
-						"hard"
+						"critical"
 					],
 					"minWeeklyHeadroom": 0
 				},
@@ -451,26 +433,10 @@
 						"critical"
 					],
 					"minWeeklyHeadroom": 0
-				},
-				{
-					"model": "openai-codex/gpt-6.1-sol",
-					"effort": "medium",
-					"difficulties": [
-						"critical"
-					],
-					"minWeeklyHeadroom": 0
-				},
-				{
-					"model": "google-antigravity/gemini-4-argon",
-					"effort": "high",
-					"difficulties": [
-						"critical"
-					],
-					"minWeeklyHeadroom": 0
 				}
 			],
 			"fallback": {
-				"model": "deepinfra/deepseek-ai/DeepSeek-V4.1-Flash-1017",
+				"model": "openscale/deepseek/deepseek-v4.1-flash-1017",
 				"effort": "high"
 			}
 		},
@@ -493,15 +459,7 @@
 					"minWeeklyHeadroom": 0
 				},
 				{
-					"model": "openai-codex/gpt-6.1-sol",
-					"effort": "low",
-					"difficulties": [
-						"exact"
-					],
-					"minWeeklyHeadroom": 0
-				},
-				{
-					"model": "google-antigravity/gemini-4-argon",
+					"model": "openai-codex/gpt-6.2-sol",
 					"effort": "low",
 					"difficulties": [
 						"exact"
@@ -525,15 +483,7 @@
 					"minWeeklyHeadroom": 0
 				},
 				{
-					"model": "openai-codex/gpt-6.1-sol",
-					"effort": "medium",
-					"difficulties": [
-						"ordinary"
-					],
-					"minWeeklyHeadroom": 0
-				},
-				{
-					"model": "google-antigravity/gemini-4-argon",
+					"model": "openai-codex/gpt-6.2-sol",
 					"effort": "medium",
 					"difficulties": [
 						"ordinary"
@@ -557,15 +507,7 @@
 					"minWeeklyHeadroom": 0
 				},
 				{
-					"model": "openai-codex/gpt-6.1-sol",
-					"effort": "high",
-					"difficulties": [
-						"hard"
-					],
-					"minWeeklyHeadroom": 0
-				},
-				{
-					"model": "google-antigravity/gemini-4-argon",
+					"model": "openai-codex/gpt-6.2-sol",
 					"effort": "high",
 					"difficulties": [
 						"hard"
@@ -589,16 +531,8 @@
 					"minWeeklyHeadroom": 0
 				},
 				{
-					"model": "openai-codex/gpt-6.1-sol",
+					"model": "openai-codex/gpt-6.2-sol",
 					"effort": "xhigh",
-					"difficulties": [
-						"critical"
-					],
-					"minWeeklyHeadroom": 0
-				},
-				{
-					"model": "google-antigravity/gemini-4-argon",
-					"effort": "high",
 					"difficulties": [
 						"critical"
 					],
@@ -606,7 +540,7 @@
 				}
 			],
 			"fallback": {
-				"model": "deepinfra/deepseek-ai/DeepSeek-V4.1-Flash-1017",
+				"model": "openscale/deepseek/deepseek-v4.1-flash-1017",
 				"effort": "high"
 			}
 		},
@@ -626,14 +560,10 @@
 					"effortFrom": "@frontier-1",
 					"effortStep": 1,
 					"minWeeklyHeadroom": 0
-				},
-				{
-					"model": "google-antigravity/gemini-4-argon",
-					"minWeeklyHeadroom": 0
 				}
 			],
 			"fallback": {
-				"model": "deepinfra/deepseek-ai/DeepSeek-V4.1-Flash-1017",
+				"model": "openscale/deepseek/deepseek-v4.1-flash-1017",
 				"effort": "high"
 			}
 		},
@@ -767,5 +697,177 @@
 		"frontier-3": "@frontier-3",
 		"lead": "@lead",
 		"vision": "@vision"
+	},
+	"experiment": {
+		"name": "worker-split-2026-11",
+		"enabled": true,
+		"endsAt": "2026-12-15T00:00:00Z",
+		"slots": [
+			{
+				"pools": [
+					"mechanical",
+					"commit"
+				],
+				"difficulties": [
+					"exact",
+					"ordinary"
+				],
+				"candidates": [
+					{
+						"model": "anthropic/claude-haiku-5-5",
+						"effort": "low"
+					},
+					{
+						"model": "openai-codex/gpt-6.1-terra",
+						"effort": "low"
+					},
+					{
+						"model": "openscale/deepseek/deepseek-v4.1-flash-1017",
+						"effort": "low"
+					},
+					{
+						"model": "xai-oauth/grok-4.6",
+						"effort": "low"
+					}
+				]
+			},
+			{
+				"pools": [
+					"mechanical",
+					"commit"
+				],
+				"difficulties": [
+					"hard"
+				],
+				"candidates": [
+					{
+						"model": "openai-codex/gpt-6.1-terra",
+						"effort": "medium"
+					},
+					{
+						"model": "anthropic/claude-sonnet-5-5",
+						"effort": "low"
+					},
+					{
+						"model": "openscale/deepseek/deepseek-v4.1-flash-1017",
+						"effort": "low"
+					},
+					{
+						"model": "xai-oauth/grok-4.6",
+						"effort": "high"
+					}
+				]
+			},
+			{
+				"pools": [
+					"code"
+				],
+				"difficulties": [
+					"exact"
+				],
+				"candidates": [
+					{
+						"model": "anthropic/claude-haiku-5-5",
+						"effort": "low"
+					},
+					{
+						"model": "openai-codex/gpt-6.1-terra",
+						"effort": "low"
+					},
+					{
+						"model": "openscale/deepseek/deepseek-v4.1-flash-1017",
+						"effort": "low"
+					},
+					{
+						"model": "xai-oauth/grok-4.6",
+						"effort": "low"
+					}
+				]
+			},
+			{
+				"pools": [
+					"code"
+				],
+				"difficulties": [
+					"ordinary"
+				],
+				"candidates": [
+					{
+						"model": "openai-codex/gpt-6.1-terra",
+						"effort": "medium"
+					},
+					{
+						"model": "anthropic/claude-haiku-5-5",
+						"effort": "medium"
+					},
+					{
+						"model": "openscale/deepseek/deepseek-v4.1-flash-1017",
+						"effort": "low"
+					},
+					{
+						"model": "anthropic/claude-sonnet-5-5",
+						"effort": "low"
+					},
+					{
+						"model": "xai-oauth/grok-4.6",
+						"effort": "high"
+					}
+				]
+			},
+			{
+				"pools": [
+					"code"
+				],
+				"difficulties": [
+					"hard"
+				],
+				"candidates": [
+					{
+						"model": "openai-codex/gpt-6.1-terra",
+						"effort": "high"
+					},
+					{
+						"model": "anthropic/claude-sonnet-5-5",
+						"effort": "medium"
+					},
+					{
+						"model": "openscale/deepseek/deepseek-v4.1-flash-1017",
+						"effort": "high"
+					},
+					{
+						"model": "openai-codex/gpt-6.2-sol",
+						"effort": "low"
+					},
+					{
+						"model": "xai-oauth/grok-4.6",
+						"effort": "high"
+					}
+				]
+			},
+			{
+				"pools": [
+					"mechanical",
+					"commit",
+					"code"
+				],
+				"difficulties": [
+					"critical"
+				],
+				"candidates": [
+					{
+						"model": "openai-codex/gpt-6.2-sol",
+						"effort": "medium"
+					},
+					{
+						"model": "anthropic/claude-sonnet-5-5",
+						"effort": "high"
+					},
+					{
+						"model": "openai-codex/gpt-6.1-terra",
+						"effort": "high"
+					}
+				]
+			}
+		]
 	}
 }
