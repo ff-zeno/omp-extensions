@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, describe, expect, mock, test } from "bun:test";
 import catalogData from "./catalog.json";
-import { type Catalog, parseCatalog } from "./routing";
+import type { Catalog } from "./routing";
 
 interface JudgeRequest {
 	state: string;
@@ -90,6 +90,8 @@ mock.module("@oh-my-pi/pi-coding-agent", () => ({
 	getSupportedEfforts: (model: { thinking: { efforts: string[] } }) => model.thinking.efforts,
 }));
 
+// Load after the mocks: a static import of ./routing would run before mock.module and fail where OMP is not installed.
+const { parseCatalog } = await import("./routing");
 const { register, resetSpeedPoolStateForTests, setAccountPinIoForTests, setCatalogForTests, setExperimentAgentDirForTests } = await import("./runtime");
 
 interface RoutingTestModel {
