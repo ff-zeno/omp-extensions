@@ -104,7 +104,7 @@ A pool member scoped with `difficulties` serves only those levels.
 Coding work uses three slots: Mechanical, Moderate difficulty, and Feature work. `mechanical`, `commit`, and `scout` use Mechanical. `code` asks Jev. A confident answer wins; when Jev is unsure, the higher of its two likeliest slots wins; with no usable answer the slot is Feature work. A slot answer never bounces the spawn back to the parent.
 Each slot has one pool per mode. Members fix model and effort per provider and are tried in the order Anthropic, OpenAI, Grok 4.6, HY4 Flash, DeepSeek V4.1 Flash (the operator's decision of 2026-11-25). Difficulty never changes a slot's effort. Urgent coding uses Sonnet 5.5 high.
 HY4 Flash and DeepSeek V4.1 Flash come through provider `opencode-go` (`opencode-go/hy4-flash-free`, `opencode-go/deepseek-v4.1-flash`) and have no quota gates.
-Every pool falls back to `openscale/deepseek/deepseek-v4.1-flash-1017` when every member is skipped: high for `review`, `lead`, `investigation`, and the Mechanical slot; low for Moderate difficulty and Feature work.
+Every pool falls back to `opencode-go/deepseek-v4.1-flash` when every member is skipped: high for `review`, `lead`, `investigation`, and the Mechanical slot; low for Moderate difficulty and Feature work.
 
 Speed (default):
 
@@ -125,7 +125,7 @@ Cost differs only where shown: Anthropic is Haiku 5.5 in every slot, and a few e
 The `investigation` task type finds a cause without fixing it, and Jev rates its difficulty. Exact and ordinary go Sonnet 5.5 high, then Sol 6.1 medium, then Grok 4.7 high. Hard and critical go Opus 5.5 high, then Sol 6.1 high, then Grok 4.7 high. Fable 5.2 and Astra 6.2 are chosen only when a `Directive:` names them.
 
 The `review` pool keeps its earlier order, Anthropic, then xAI, then OpenAI (Sol 6.1). The reviewer is never the model that wrote the plan or code.
-The `lead`, `plan`, and `security-review` task types share the `lead` pool: `@frontier-1` → `@frontier-2` → `@frontier-3`. Anthropic uses `minWeeklyHeadroom` 0.05; the other members use weekly headroom 0. Opus keeps its model-map effort, clamped to high–xhigh for lead/security review and medium–xhigh for planning. Both frontier rollover members set `effortFrom: "@frontier-1"`; frontier-2 matches that effort, while frontier-3 sets `effortStep: 1` for one level higher, capped at xhigh. Members do not pin effort. Remaining eligible members stay in the provider-failure retry chain. The all-skipped fallback is `openscale/deepseek/deepseek-v4.1-flash-1017:high`.
+The `lead`, `plan`, and `security-review` task types share the `lead` pool: `@frontier-1` → `@frontier-2` → `@frontier-3`. Anthropic uses `minWeeklyHeadroom` 0.05; the other members use weekly headroom 0. Opus keeps its model-map effort, clamped to high–xhigh for lead/security review and medium–xhigh for planning. Both frontier rollover members set `effortFrom: "@frontier-1"`; frontier-2 matches that effort, while frontier-3 sets `effortStep: 1` for one level higher, capped at xhigh. Members do not pin effort. Remaining eligible members stay in the provider-failure retry chain. The all-skipped fallback is `opencode-go/deepseek-v4.1-flash:high`.
 Luna 5.6 is in no pool. Gemini 4 Argon was removed on 2026-11-16.
 The `review` pool, by difficulty:
 
