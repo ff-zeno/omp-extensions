@@ -14,6 +14,9 @@ import reviewNotesData from "./review-notes.json";
 import { parseReviewNotes, registerReviewNotes } from "./review-notes";
 import {
 	type AccountLabelTable,
+	ASK_SLOT,
+	highestSlot,
+	slotPoolName,
 	activeExperimentSlot,
 	capEffort,
 	type Catalog,
@@ -817,6 +820,8 @@ export function register(pi: ExtensionAPI): void {
 			...decision,
 			agent,
 			...route,
+			// `route.slot` is the model spec; the coding slot keeps its own key.
+			...(decision.slot !== undefined ? { codingSlot: decision.slot } : {}),
 			latencyMs,
 			...callerDetails(ctx),
 			catalogVersion: catalog.version,
@@ -830,6 +835,10 @@ export function register(pi: ExtensionAPI): void {
 			const slot = route.slot ?? decision.choice;
 			const target = route.model || route.thinking ? ` · ${route.model ?? "bound model"}:${route.thinking ?? "default"}` : "";
 			const difficulty = route.difficulty === undefined ? "" : ` · ${route.difficulty}`;
+			const codingSlot =
+				decision.slot === undefined
+					? ""
+					: ` · slot ${decision.slot}${decision.slotReason === "classified" ? "" : ` (${decision.slotReason?.replaceAll("-", " ")})`}`;
 			const confidence =
 				decision.confidence === undefined ? "" : ` · ${Math.round(decision.confidence * 100)}%`;
 			const source = decision.source === "catalog" ? " · fixed" : "";
@@ -842,7 +851,7 @@ export function register(pi: ExtensionAPI): void {
 						? ` · pool ${route.pool.active}`
 						: "";
 			const split = route.experiment ? ` · split test ${route.experiment.slot}` : "";
-			lastLine = `${routingLabel(ctx)}: ${agent}: ${slot ?? "effort"}${target}${difficulty}${confidence}${source}${backup}${rollover}${pool}${split}${persona} · ${latency}${usage}`;
+			lastLine = `${routingLabel(ctx)}: ${agent}: ${slot ?? "effort"}${target}${codingSlot}${difficulty}${confidence}${source}${backup}${rollover}${pool}${split}${persona} · ${latency}${usage}`;
 			return lastLine;
 		}
 		const reason = decision.reason.replaceAll("-", " ");
@@ -887,8 +896,20 @@ export function register(pi: ExtensionAPI): void {
 		// Core's own list; replaced below when routing picks a different one.
 		if (event.spawnKey !== undefined) rememberSpawnChain(ctx.agent.id, event.spawnKey, event.patterns);
 		catalog = loadCatalog();
+		// An explicit `Directive: use <model>` always wins over automatic routing; only OMP core's own locks can stop it.
+		const directive = parseDirective(event.assignment);
+		let directiveModel: string | undefined;
+		let directiveEffort: Effort | undefined;
+		let directiveTaskType: string | undefined;
+		if (directive) {
+			const alias = catalog.directiveTargets[directive.target];
+			if (alias) directiveModel = alias;
+			else if (isLiteralModel(directive.target)) directiveModel = directive.target;
+			else if (directive.target in catalog.taskTypes) directiveTaskType = directive.target;
+			directiveEffort = directive.effort;
+		}
 		let readinessUsage: UsageSummary | undefined;
-		if (catalog.planningReadiness.agents.includes(event.agent) && ctx.agent.kind === "main") {
+		if (directiveModel === undefined && catalog.planningReadiness.agents.includes(event.agent) && ctx.agent.kind === "main") {
 			const { result: readiness, latencyMs } = await withJevActivity(ctx, "checking planning readiness", () =>
 				evaluatePlanningReadiness(event.assignment, catalog, evaluator(ctx), event.signal),
 			);
@@ -915,7 +936,7 @@ export function register(pi: ExtensionAPI): void {
 				return { block: true, reason };
 			}
 		}
-		if (!enabled) {
+		if (!enabled && directiveModel === undefined) {
 			reportSkipped(ctx, event.agent, "routing-off", `Jev routing off · ${event.agent} · baseline kept`);
 			return;
 		}
@@ -931,11 +952,11 @@ export function register(pi: ExtensionAPI): void {
 		}
 		const pinned = catalog.agents.pinned.includes(event.agent);
 		const covered = catalog.agents.covered.includes(event.agent);
-		if (!pinned && !covered) {
+		if (!pinned && !covered && directiveModel === undefined) {
 			reportSkipped(ctx, event.agent, "unknown-agent", `Jev skipped · ${event.agent} · unknown agent · baseline kept`);
 			return;
 		}
-		if (isAutomaticPinnedAgent(event.agent)) {
+		if (directiveModel === undefined && isAutomaticPinnedAgent(event.agent)) {
 			const reason = `[JEV Intercept] ${event.agent} is chat-only; choose a supported worker job instead.`;
 			reportSkipped(ctx, event.agent, "chat-only-selector", `Jev declined · ${event.agent} · chat-only selector · spawn blocked`);
 			if (ctx.hasUI) ctx.ui.notify(reason, "warning");
@@ -966,7 +987,7 @@ export function register(pi: ExtensionAPI): void {
 		};
 
 		// Pinned agents keep their bound model; Jev sets only effort from the model's map.
-		if (pinned) {
+		if (pinned && directiveModel === undefined) {
 			const pattern = event.patterns[0] ?? (event.modelRole ? `@${event.modelRole}` : undefined);
 			const model = pattern ? ctx.models.resolve(pattern) : undefined;
 			const supported = model ? getSupportedEfforts(model) : [];
@@ -1005,30 +1026,14 @@ export function register(pi: ExtensionAPI): void {
 			};
 		}
 
-		// Covered agents: directive > pool > fixed task-type model > bound model.
-		const directive = parseDirective(event.assignment);
-		let directiveModel: string | undefined;
-		let directiveRole: string | undefined;
-		let directiveEffort: Effort | undefined;
-		let directiveTaskType: string | undefined;
-		if (directive) {
-			const alias = catalog.directiveTargets[directive.target];
-			if (alias) {
-				directiveModel = alias;
-				directiveRole = directive.target;
-			} else if (isLiteralModel(directive.target)) {
-				directiveModel = directive.target;
-				directiveRole = directive.target;
-			} else if (directive.target in catalog.taskTypes) {
-				directiveTaskType = directive.target;
-			}
-			directiveEffort = directive.effort;
-		}
+		// Covered agents: directive model > directive task type / pool > fixed task-type model > bound model.
 
 		// A directive task type wins over the agent's fixed task type; a directive model skips both.
 		let taskTypeName = directiveTaskType ?? (directiveModel === undefined ? catalog.agents.taskTypes[event.agent] : undefined);
 		const needsTaskChoice = directiveModel === undefined && taskTypeName === undefined;
-		const candidates = needsTaskChoice ? Object.keys(catalog.taskTypes) : [];
+		const candidates = needsTaskChoice
+			? Object.keys(catalog.taskTypes).filter(name => catalog.taskTypes[name].fixedOnly !== true)
+			: [];
 		if (needsTaskChoice && candidates.length === 1) taskTypeName = candidates[0];
 
 		let decision: Decision = { source: "catalog", reason: "fixed" };
@@ -1038,20 +1043,29 @@ export function register(pi: ExtensionAPI): void {
 				? candidates.map(name => ({ id: name, description: catalog.taskTypes[name].description }))
 				: [];
 		const rateDifficulty = directiveModel
-			? directiveEffort === undefined
+			? directiveEffort === undefined && enabled
 			: taskTypeName !== undefined
 				? taskTypeEffortVaries(catalog, taskTypeName)
 				: candidates.some(name => taskTypeEffortVaries(catalog, name));
+		// The coding slot rides in the same Jev call whenever the spawn can land on a task type that asks it.
+		const askSlot = directiveModel
+			? false
+			: taskTypeName !== undefined
+				? catalog.taskTypes[taskTypeName]?.slot === ASK_SLOT
+				: candidates.some(name => catalog.taskTypes[name].slot === ASK_SLOT);
 		// The child's agent id is the spawn key for task and workpool spawns; without one the child cannot claim a suggestion.
 		const personaKey =
 			ctx.agent.id !== undefined && event.spawnKey !== undefined && catalog.personas.agents.includes(event.agent)
 				? { parent: ctx.agent.id, child: event.spawnKey }
 				: undefined;
-		if (offered.length > 1 || rateDifficulty || personaKey) {
+		if (offered.length > 1 || rateDifficulty || personaKey || askSlot) {
 			({ result: decision, latencyMs } = await withJevActivity(
 				ctx,
 				offered.length > 1 ? `classifying ${event.agent} task type` : `rating ${event.agent} difficulty`,
-				() => choose(state, offered, rateDifficulty, personaKey !== undefined, catalog, evaluator(ctx), event.signal),
+				() =>
+					choose(state, offered, rateDifficulty, personaKey !== undefined, catalog, evaluator(ctx), event.signal, {
+						askSlot,
+					}),
 			));
 		}
 		decision = withReadiness(decision);
@@ -1074,9 +1088,14 @@ export function register(pi: ExtensionAPI): void {
 			return { block: true, reason, note };
 		}
 		const automaticClassification = directiveModel === undefined;
+		// A slot task type never goes back to the parent: its slot always resolves and difficulty is not used.
+		const slotSpec = directiveModel === undefined && taskTypeName !== undefined ? catalog.taskTypes[taskTypeName]?.slot : undefined;
 		if (
 			(event.agent === "scout" && directiveModel === undefined && decision.source === "baseline") ||
-			(automaticClassification && rateDifficulty && (decision.source === "baseline" || decision.difficulty === undefined))
+			(automaticClassification &&
+				rateDifficulty &&
+				slotSpec === undefined &&
+				(decision.source === "baseline" || decision.difficulty === undefined))
 		) {
 			const reason = event.agent === "scout" ? scoutClarificationReason(decision) : parentClarificationReason(event.agent, decision);
 			const note = reportDecision(ctx, decision, event.agent, personaRoute, latencyMs);
@@ -1086,9 +1105,11 @@ export function register(pi: ExtensionAPI): void {
 		const difficulty = decision.difficulty ?? ORDINARY;
 		const boundPattern = event.patterns[0] ?? (event.modelRole ? `@${event.modelRole}` : undefined);
 		const boundModel = boundPattern ? ctx.models.resolve(boundPattern) : undefined;
+		// A scout stays on the lowest slot's bounded work unless a directive names a model.
 		if (
 			event.agent === "scout" &&
-			((directiveModel === undefined && taskTypeName !== "mechanical") ||
+			directiveModel === undefined &&
+			(slotSpec !== catalog.slots.order[0] ||
 				(decision.difficulty !== undefined && DIFFICULTY_NAMES.indexOf(decision.difficulty) > DIFFICULTY_NAMES.indexOf(ORDINARY)))
 		) {
 			const reason = scoutClarificationReason(decision);
@@ -1101,14 +1122,16 @@ export function register(pi: ExtensionAPI): void {
 		let poolRoute: PoolRouteReport | undefined;
 		let experimentRoute: ExperimentRouteReport | undefined;
 		let planNote = "";
-		const optionForModel = (spec: string, range: EffortRange | undefined, pinnedEffort?: Effort): RouteOption | undefined => {
+		// An explicit directive effort is never capped by the catalog and a directive model is kept even without a routable effort; only the model's own supported efforts apply.
+		const optionForModel = (spec: string, range: EffortRange | undefined, pinnedEffort?: Effort, explicit = false): RouteOption | undefined => {
 			const model = resolveModel(spec);
 			if (!model) return undefined;
 			const exact = `${model.provider}/${model.id}`;
 			const supported = getSupportedEfforts(model);
 			const effort = pinnedEffort
-				? fitEffort(capEffort(catalog, exact, pinnedEffort), supported)
+				? fitEffort(explicit ? pinnedEffort : capEffort(catalog, exact, pinnedEffort), supported)
 				: effortForModel(catalog, exact, difficulty, range, supported);
+			if (explicit) return { slot: spec, model, exact, ...(effort ? { effort } : {}) };
 			return effort ? { slot: spec, model, exact, effort } : undefined;
 		};
 		const pushUnique = (option: RouteOption | undefined) => {
@@ -1116,16 +1139,19 @@ export function register(pi: ExtensionAPI): void {
 		};
 
 		if (directiveModel) {
-			pushUnique(optionForModel(directiveModel, undefined, directiveEffort));
+			pushUnique(optionForModel(directiveModel, undefined, directiveEffort, true));
 		} else {
 			const taskType = catalog.taskTypes[taskTypeName as string];
-			if (taskType.pool) {
-				const pool = catalog.pools[taskType.pool];
+			// A slot task type uses its slot's pool in the catalog's mode; `ask` takes Jev's slot or the highest.
+			const slot = slotSpec === ASK_SLOT ? (decision.slot ?? highestSlot(catalog)) : slotSpec;
+			const poolName = slot !== undefined ? slotPoolName(catalog, slot) : taskType.pool;
+			if (poolName) {
+				const pool = catalog.pools[poolName];
 				const experimentNow = Date.now();
-				const experimentSlot = activeExperimentSlot(catalog, taskType.pool, difficulty, experimentNow);
+				const experimentSlot = activeExperimentSlot(catalog, poolName, difficulty, experimentNow);
 				if (experimentSlot && catalog.experiment) {
 					const experimentName = catalog.experiment.name;
-					const slotKey = `${taskType.pool}/${difficulty}`;
+					const slotKey = `${poolName}/${difficulty}`;
 					const candidateMembers: PoolMember[] = experimentSlot.candidates.flatMap(candidate => {
 						const model = resolveModel(candidate.model);
 						if (!model) return [];

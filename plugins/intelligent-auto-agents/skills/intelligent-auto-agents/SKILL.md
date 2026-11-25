@@ -7,6 +7,8 @@ description: Use when delegating OMP work with intelligent auto-agents enabled, 
 
 Jev is the router described by `catalog.json` (catalog v9). Eligible automatic worker spawns get task-type/difficulty routing or pinned-worker effort selection; operator chat choices stay unchanged.
 
+**The user's explicit model choice always overrides automatic routing.** `Directive: use <task type>` overrides the agent's pin; `Directive: use <model>` overrides everything. Automated routing is only the default.
+
 ## Terms
 
 - **Model** means the provider and model that runs a worker.
@@ -16,8 +18,10 @@ Jev is the router described by `catalog.json` (catalog v9). Eligible automatic w
 - **Job** means the worker purpose selected with the `agent` field.
 - **Covered agent** means an agent routed through a task type: `task`, `sonic`, `scout`, `reviewer`, `security-reviewer`, `git`, and `plan`.
 - **Pinned agent** means a worker that keeps its bound model while Jev sets only effort: `orchestrator`, `design-master`, `design-second`, `review-closer`, `review-verifier`, `review-frontier-1`, `review-frontier-2`, and `review-frontier-3`. Medium/slow1–3 are chat-only choices; automatic worker selectors using them are declined with guidance to choose a supported job.
-- **Task type** means a named kind of work — `mechanical`, `commit`, `code`, `review`, `lead`, `vision`, `security-review`, `plan`, `plan-review`, `frontier-review` — with a fixed model or a pool, plus an effort range.
-- **Pool** means an ordered member list (`mechanical`, `commit`, `code`, `review`, `lead`, `plan-review`) that Jev ranks by quota before each spawn.
+- **Task type** means a named kind of work — `mechanical`, `commit`, `code`, `investigation`, `review`, `lead`, `vision`, `security-review`, `plan`, `plan-review`, `frontier-review`, `scout` — with a fixed model, a pool, or a coding slot, plus an effort range.
+- **Pool** means an ordered member list (`investigation`, `review`, `lead`, `plan-review`, and one pool per coding slot and mode) that Jev ranks by quota before each spawn.
+- **Coding slot** means Mechanical, Moderate difficulty, or Feature work. Jev answers it in the same call as the task type and difficulty, and each slot's members fix model and effort per provider, whatever the difficulty.
+- **Mode** means the catalog `mode` field, `speed` (default) or `cost`, which picks the slot pools coding work uses. Edit it by hand.
 - **Difficulty** means `exact`, `ordinary`, `hard`, or `critical`, rated from the work itself.
 - **Difficulty-to-effort map** means the per-model effort for each difficulty; the task-type range clamps it and the model's supported efforts trim it.
 - **Directive** means a `Directive:` line in the brief naming a role alias, literal model, or task type, with an optional effort.
@@ -34,7 +38,7 @@ Jev is the router described by `catalog.json` (catalog v9). Eligible automatic w
 | Persona selected by `# Mode: brute` or `# Mode: orchestrate`: Brute for settled narrow work done as told, Normal for investigation, design choice, or review, Orchestrate only with a ready plan whose lanes run 2+ parallel streams | Parent |
 | Persona when the parent named none: Normal or Brute for `task`, `sonic`, and `git` workers, never Orchestrate; Normal when Jev is unsure or unavailable | Jev, from `catalog.json` `personas` |
 | Recipe | Parent |
-| Task type, difficulty, pool order, model role, and effort | Jev, from `catalog.json`, except `git`, which pins the `commit` task type |
+| Task type, difficulty, coding slot, pool order, model role, and effort | Jev, from `catalog.json`, except `git`, which pins the `commit` task type, and `scout`, which pins `scout`; a `Directive: use <task type>` overrides either pin |
 | Concrete model and effort validation | OMP, from `modelRoles` |
 
 Jev never adds, removes, or reorders workers.
@@ -43,9 +47,9 @@ Jev never adds, removes, or reorders workers.
 
 Highest wins:
 
-1. A spawn lock (`modelLocked` or `effortLocked`) keeps the baseline configuration.
-2. A `Directive:` line in the brief pins the named role alias, literal model, or task type.
-3. The agent's pinned task type from `agents.taskTypes` (a directive model skips it; a directive task type overrides it).
+1. An OMP core spawn lock (`modelLocked` or `effortLocked`) keeps the baseline configuration; the plugin never imposes one.
+2. A `Directive:` line in the brief naming a role alias or literal model always wins: quota skips, effort caps, the scout rule, planning readiness, and review author exclusion do not apply, and a directive effort is used as given when the model supports it. A directive task type outranks the agent's pin.
+3. The agent's pinned task type from `agents.taskTypes` (`git` → `commit`, `scout` → `scout`; a directive model skips it; a directive task type overrides it).
 4. A pool ranks its members by difficulty scope and quota for the task type.
 5. A fixed task-type model, then the agent's bound `modelRoles` selector.
 
@@ -60,6 +64,7 @@ Workers pin OAuth logins from the machine-local account-pin file by login email,
 5. Delegate useful substantive evidence/execution before doing the bulk in the parent; dispatch independent assignments together. Keep conversation, trivial actions, decisions and integration inline. A bounded worker executes its assignment directly, without recursive delegation ceremony.
 6. To steer Jev without disabling routing, add a `Directive: use <alias|model> [effort]` line to the brief.
 7. When automatic type/difficulty is uncertain or classification is unavailable, use the block reason to sharpen the assignment once from existing context. Ask the operator only for a material decision; do not resend unchanged or do the blocked bulk task inline.
+8. When the root cause is unknown, the parent runs two parallel root-cause agents (`investigation`) itself; Jev never adds workers.
 
 ## Recipes
 
@@ -79,11 +84,11 @@ Jev does not see concrete model identifiers.
 
 Covered agents resolve a task type, then that type's pool or fixed model:
 
-- `task` uses `code` for settled specifications, `lead` when judgment, hard debugging, or root-cause work is needed, `vision` for image, screenshot, or video analysis, and `mechanical` or `commit` when the brief is exact non-code work or git operations.
+- `task` uses `code` for settled specifications (Jev also answers the coding slot), `investigation` to find a cause without fixing it, `lead` when architecture or an open design decision is needed, `vision` for image, screenshot, or video analysis, and `mechanical` or `commit` when the brief is exact non-code work or git operations.
 - `reviewer` uses `review` for settled-spec verification of an implemented diff, and `plan-review` (or `frontier-review`) when the assignment reviews a plan.
 - `sonic` uses `mechanical` for non-code writes with exact content (docs text, config values, data files) and directed tool runs; any source-code edit, however trivial, goes to `task`.
-- `scout` uses economical `mechanical` exact/ordinary workers for bounded read-only evidence collection. Rate that slice, not the surrounding problem; architecture/root-cause judgment or hard/critical work must be reframed or assigned separately.
-- `git` is pinned to `commit` for commits, branches, merges, and pull requests.
+- `scout` is pinned to the `scout` task type, which uses the Mechanical slot and is never offered to Jev. A `Directive: use <task type>` overrides the pin. Scouts do bounded read-only evidence collection; architecture/root-cause judgment or hard/critical work must be reframed or assigned separately.
+- `git` is pinned to `commit`, which uses the Mechanical slot, for commits, branches, merges, and pull requests. A `Directive: use <task type>` overrides the pin.
 - `plan` uses the quota-aware `lead` pool at medium to xhigh and may be rated for difficulty.
 - `security-reviewer` uses `security-review`, sharing the quota-aware `lead` pool at high to xhigh.
 
@@ -96,42 +101,33 @@ Pinned agents keep their bound `modelRoles`; Jev sets only effort from the model
 
 Jev rates difficulty as Exact, Ordinary, Hard, or Critical according to the catalog ladder.
 A pool member scoped with `difficulties` serves only those levels.
-The `mechanical`, `commit`, and `code` pools list one member per provider per difficulty, tried OpenAI, then Anthropic, then xAI (Grok), because Haiku, Sonnet, and Opus share one Anthropic quota, so rolling over inside a provider buys nothing. The operator's decision of 2026-11-15 sets that order: use the OpenAI subscription first, conserve the Anthropic quota, and keep Grok last because it made the most mistakes in the session study. The `review` pool keeps its earlier order, Anthropic, then xAI, then OpenAI.
-Gemini 4 Argon was the last member of `code`, `review`, and `lead` until the operator's Google Antigravity account was banned and Argon was removed on 2026-11-16.
-The `mechanical` and `commit` pools fall back to `openscale/deepseek/deepseek-v4.1-flash-1017` low when every member is quota-skipped. The `code` and `review` pools use that same fallback at high.
-The `lead`, `plan`, and `security-review` task types share the `lead` pool: `@frontier-1` → `@frontier-2` → `@frontier-3`. Anthropic uses the same quota gates as other worker pools; the other members use weekly headroom 0. Opus keeps its model-map effort, clamped to high–xhigh for lead/security review and medium–xhigh for planning. Both frontier rollover members set `effortFrom: "@frontier-1"`; frontier-2 matches that effort, while frontier-3 sets `effortStep: 1` for one level higher, capped at xhigh. Members do not pin effort. Remaining eligible members stay in the provider-failure retry chain. The all-skipped fallback is `openscale/deepseek/deepseek-v4.1-flash-1017:high`.
+Coding work uses three slots: Mechanical, Moderate difficulty, and Feature work. `mechanical`, `commit`, and `scout` use Mechanical. `code` asks Jev. A confident answer wins; when Jev is unsure, the higher of its two likeliest slots wins; with no usable answer the slot is Feature work. A slot answer never bounces the spawn back to the parent.
+Each slot has one pool per mode. Members fix model and effort per provider and are tried in the order Anthropic, OpenAI, Grok 4.6, HY4 Flash, DeepSeek V4.1 Flash (the operator's decision of 2026-11-25). Difficulty never changes a slot's effort. Urgent coding uses Sonnet 5.5 high.
+HY4 Flash and DeepSeek V4.1 Flash come through provider `opencode-go` (`opencode-go/hy4-flash-free`, `opencode-go/deepseek-v4.1-flash`) and have no quota gates.
+Every pool falls back to `openscale/deepseek/deepseek-v4.1-flash-1017` when every member is skipped: high for `review`, `lead`, `investigation`, and the Mechanical slot; low for Moderate difficulty and Feature work.
 
-## Split test (temporary)
+Speed (default):
 
-Until 2026-12-15 each `mechanical`, `commit`, and `code` slot rotates the candidates below so every model sees a comparable share of jobs.
-Set `experiment.enabled` to `false` in `catalog.json` to switch the test off.
-The pool tables describe the quota rollover that returns after the test ends.
+| Slot | Anthropic | OpenAI | Grok | HY4 Flash | DeepSeek V4.1 Flash |
+|---|---|---|---|---|---|
+| Feature work | Sonnet 5.5 high | Sol 6.1 medium | Grok 4.6 high | high | low |
+| Moderate difficulty | Sonnet 5.5 low | Terra 6.1 high | Grok 4.6 low | low | low |
+| Mechanical | Sonnet 5.5 low | Terra 6.1 low | Grok 4.6 low | high | high |
 
-| Pools | Difficulty | Candidates, in rotation order |
-|---|---|---|
-| `mechanical`, `commit` | exact, ordinary | Haiku low, Terra low, DeepSeek low, Grok low |
-| `mechanical`, `commit` | hard | Terra medium, Sonnet low, DeepSeek low, Grok high |
-| `code` | exact | Haiku low, Terra low, DeepSeek low, Grok low |
-| `code` | ordinary | Terra medium, Haiku medium, DeepSeek low, Sonnet low, Grok high |
-| `code` | hard | Terra high, Sonnet medium, DeepSeek high, Sol low, Grok high |
-| `mechanical`, `commit`, `code` | critical | Sol medium, Sonnet high, Terra high |
+Cost differs only where shown: Anthropic is Haiku 5.5 in every slot, and a few efforts change.
 
-| Pool | Difficulty | 1 OpenAI | 2 Anthropic | 3 xAI (Grok) |
-|---|---|---|---|---|
-| `mechanical` | exact | Luna xhigh | Haiku xhigh | Grok low |
-| `mechanical` | ordinary | Luna xhigh | Haiku xhigh | Grok low |
-| `mechanical` | hard | Terra medium | Sonnet low | Grok high |
-| `mechanical` | critical | Terra high | Opus medium | Grok high |
-| `commit` | exact | Luna xhigh | Haiku xhigh | Grok low |
-| `commit` | ordinary | Luna xhigh | Haiku xhigh | Grok low |
-| `commit` | hard | Terra medium | Opus low | Grok high |
-| `commit` | critical | Terra high | Opus medium | Grok xhigh |
-| `code` | exact | Luna max | Haiku xhigh | Grok low |
-| `code` | ordinary | Terra medium | Sonnet low | Grok high |
-| `code` | hard | Sol low | Opus medium | Grok high |
-| `code` | critical | Sol medium | Opus high | Grok xhigh |
+| Slot | Anthropic | OpenAI | Grok | HY4 Flash | DeepSeek V4.1 Flash |
+|---|---|---|---|---|---|
+| Feature work | Haiku 5.5 high | Sol 6.1 medium | Grok 4.6 high | high | low |
+| Moderate difficulty | Haiku 5.5 high | Terra 6.1 high | Grok 4.6 low | low | low |
+| Mechanical | Haiku 5.5 low | Terra 6.1 low | Grok 4.6 low | low | high |
 
-The `review` pool keeps its earlier order:
+The `investigation` task type finds a cause without fixing it, and Jev rates its difficulty. Exact and ordinary go Sonnet 5.5 high, then Sol 6.1 medium, then Grok 4.7 high. Hard and critical go Opus 5.5 high, then Sol 6.1 high, then Grok 4.7 high. Fable 5.2 and Astra 6.2 are chosen only when a `Directive:` names them.
+
+The `review` pool keeps its earlier order, Anthropic, then xAI, then OpenAI (Sol 6.1). The reviewer is never the model that wrote the plan or code.
+The `lead`, `plan`, and `security-review` task types share the `lead` pool: `@frontier-1` → `@frontier-2` → `@frontier-3`. Anthropic uses `minWeeklyHeadroom` 0.05; the other members use weekly headroom 0. Opus keeps its model-map effort, clamped to high–xhigh for lead/security review and medium–xhigh for planning. Both frontier rollover members set `effortFrom: "@frontier-1"`; frontier-2 matches that effort, while frontier-3 sets `effortStep: 1` for one level higher, capped at xhigh. Members do not pin effort. Remaining eligible members stay in the provider-failure retry chain. The all-skipped fallback is `openscale/deepseek/deepseek-v4.1-flash-1017:high`.
+Luna 5.6 is in no pool. Gemini 4 Argon was removed on 2026-11-16.
+The `review` pool, by difficulty:
 
 | Pool | Difficulty | Anthropic | xAI (Grok) | OpenAI |
 |---|---|---|---|---|
@@ -140,18 +136,18 @@ The `review` pool keeps its earlier order:
 | `review` | hard | Opus medium | Grok high | Sol high |
 | `review` | critical | Opus high | Grok xhigh | Sol xhigh |
 
-Sonnet is named literally with no role and never runs above low.
-Anthropic members are eligible while weekly headroom is at least 0.10 (`minWeeklyHeadroom` 0.1); Anthropic no longer reports a 5-hour window, so no member has a 5-hour gate.
-xAI (`@frontier-3`, Grok) and OpenAI (`openai-codex/gpt-5.6-luna` for exact and ordinary mechanical and commit and exact code, `openai-codex/gpt-6.1-terra` for hard and critical mechanical and commit and ordinary code, and `openai-codex/gpt-6.2-sol` for hard and critical code and review) share one gate: `minWeeklyHeadroom` 0, so they are eligible while weekly usage is not ahead of the weekly pace.
+Sonnet is named literally with no role and is no longer capped at low.
+Anthropic members are eligible while weekly headroom is at least 0.05 (`minWeeklyHeadroom` 0.05); Anthropic no longer reports a 5-hour window, so no member has a 5-hour gate.
+xAI (`@frontier-3`, Grok 4.6) and OpenAI (`openai-codex/gpt-6.1-terra` for Mechanical and Moderate difficulty, `openai-codex/gpt-6.1-sol` for Feature work, review, and investigation) share one gate: `minWeeklyHeadroom` 0, so they are eligible while weekly usage is not ahead of the weekly pace.
 Neither has a monthly gate; both report only a 7-day window.
 Every provider's in-flight burst penalty counts against its weekly window for crowding and skipping, but not for the pace (headroom) check, so a freshly reset window stays on pace while dispatches are in flight.
-Within 6 hours after a reset, a window with less than 3% real usage counts as exactly on pace (`freshWindowMs`, `freshWindowMaxUsed`); Anthropic's 0.1 reserve still applies, so Anthropic subagents stay gated early in the week.
+Within 6 hours after a reset, a window with less than 3% real usage counts as exactly on pace (`freshWindowMs`, `freshWindowMaxUsed`); Anthropic's 0.05 reserve still applies, so Anthropic subagents stay gated early in the week.
 A gated member with no usage report, or a report that lacks a valid gated window, gets `no-usage` and is ranked last after crowded members; stale and partial reports still exclude.
 A window at or above `demoteAt` 0.8 crowds a member; at or above `skipAt` 0.95, or exhausted, it is skipped.
-Within 12 hours of a weekly reset, weekly crowding is lifted; within 5 hours, the weekly pace check and weekly `skipAt` are lifted (weekly exhaustion still stops new work), and Anthropic's short-window cap rises from 0.7 to `demoteAt` 0.8.
+Within 12 hours of a weekly reset, weekly crowding is lifted; within 5 hours, the weekly pace check and weekly `skipAt` are lifted for every provider except Anthropic (weekly exhaustion still stops new work). Anthropic skips workers once its weekly use is 95% or more, which keeps 5% for chat (`finalWindowReserve`).
 Ungated members (the `plan-review` pool) have no usage-window gates; only failure demotion applies.
-Protected aliases (`@frontier-2`, `@slow2`, `@advisor`, `@manager`) are restricted to the `plan-review` and `lead` pools by `reviewOnly`; they remain rejected in ordinary worker pools. Literal Luna, Terra, and Sol serve the worker pools: Luna for exact and ordinary mechanical and commit and exact code, Terra for hard and critical mechanical and commit and ordinary code, and Sol for hard and critical code and review. The lead pool uses role references, so role rebinding changes its models.
-`openai-codex/gpt-5.6-luna` is blocked as a `Directive:` target but serves the `mechanical` and `commit` pools at exact and ordinary and the `code` pool at exact; the `web` role also names it literally.
+Protected aliases (`@frontier-2`, `@slow2`, `@advisor`, `@manager`) are restricted to the `plan-review` and `lead` pools by `reviewOnly`; they remain rejected in ordinary worker pools. Literal Terra and Sol serve the worker pools.
+Luna is blocked as a `Directive:` target and is in no pool; the `web` role still names it literally. Fable 5.2 and Astra 6.2 are never routed automatically; a `Directive:` naming the literal model still reaches it.
 A planning request first passes the catalog readiness check.
 An autonomous planner is allowed only when requirements, target files, acceptance criteria, and technical constraints are concrete.
 Otherwise the parent should discuss the open choices with the user first.
@@ -168,7 +164,7 @@ plan:
     - model: anthropic/claude-opus-5-5
       effort: high
   reviews:
-    - model: openai-codex/gpt-6.2-sol
+    - model: openai-codex/gpt-6.1-sol
       kind: adversarial            # adversarial | peer | frontier
       verdict: changes-requested   # passed | changes-requested
 ---
@@ -190,7 +186,7 @@ Jev evaluates routing requests through TypeSafe.
 Authenticate with `/login typesafe` or set `TYPESAFE_API_KEY`.
 Without a TypeSafe key, ordinary automatic jobs return a routing-unavailable block/reason to the parent instead of silently keeping the configured model.
 Jev failure or uncertain required type/difficulty also blocks ordinary automatic jobs. Task-type directives still require confident necessary difficulty. Deliberate named-model/pinned review requests retain their explicit choices; routing disabled, explicit model/effort locks and unresolvable pools preserve their existing baseline behavior.
-Quota is not a global dispatch cap: `plan-review` members are ungated, missing usage can still select Anthropic, and a failed usage fetch preserves pool order. `poolLimits.ignoreQuota` lists providers whose members skip all usage-based ranking while failure demotion still applies; the shipped catalog lists `openai-codex`. Fixed `vision` keeps its provider-failure `@lead` backup without quota checks; named models and pinned agents intentionally bypass pool gates. All-skipped worker fallbacks do not recheck quota. Optional catalog `provider` keeps only that OMP provider for automatic pool and fixed-model routing; set it in `catalog.json` and the next spawn picks it up. `catalog.json` is re-read on each spawn when its mtime changes; TypeScript changes still need a new OMP process.
+Quota is not a global dispatch cap: `plan-review` members are ungated, missing usage can still select Anthropic, and a failed usage fetch preserves pool order. `poolLimits.ignoreQuota` lists providers whose members skip all usage-based ranking while failure demotion still applies; the shipped catalog sets it to `[]`, so every provider, OpenAI included, is paced. Fixed `vision` keeps its provider-failure `@lead` backup without quota checks; named models and pinned agents intentionally bypass pool gates. All-skipped worker fallbacks do not recheck quota. Optional catalog `provider` keeps only that OMP provider for automatic pool and fixed-model routing; set it in `catalog.json` and the next spawn picks it up. `catalog.json` is re-read on each spawn when its mtime changes; TypeScript changes still need a new OMP process.
 
 ## Visibility
 

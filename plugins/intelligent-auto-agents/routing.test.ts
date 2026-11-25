@@ -79,15 +79,21 @@ describe("catalog v9", () => {
 			"code",
 			"commit",
 			"frontier-review",
+			"investigation",
 			"lead",
 			"mechanical",
 			"plan",
 			"plan-review",
 			"review",
+			"scout",
 			"security-review",
 			"vision",
 		]);
-		expect(catalog.agents.taskTypes).toEqual({ git: "commit" });
+		expect(catalog.agents.taskTypes).toEqual({ git: "commit", scout: "scout" });
+		expect(catalog.mode).toBe("speed");
+		expect(catalog.slots.order).toEqual(["Mechanical", "Moderate difficulty", "Feature work"]);
+		expect(catalog.taskTypes.scout).toMatchObject({ slot: "Mechanical", fixedOnly: true });
+		expect(catalog.taskTypes.code.slot).toBe("ask");
 		expect(catalog.agents.covered).toEqual(["task", "sonic", "scout", "reviewer", "security-reviewer", "git", "plan"]);
 		expect(catalog.agents.pinned).toContain("review-frontier-1");
 		expect(catalog.agents.pinned).toContain("review-frontier-3");
@@ -96,6 +102,25 @@ describe("catalog v9", () => {
 		expect(catalog.planningReadiness.agents).toEqual(["plan"]);
 		expect(catalog.blockedDirectiveTargets).toEqual(["luna", "astra"]);
 		expect(catalog.jevInstructions.route.length).toBeGreaterThan(0);
+	});
+
+	test("Astra and Fable are never automatic pool members", () => {
+		const banned = /gpt-6\.2-astra|claude-fable-5-2/;
+		for (const pool of Object.values(catalog.pools)) {
+			for (const member of pool.members) {
+				expect(member.model).not.toMatch(banned);
+			}
+			expect(pool.fallback.model).not.toMatch(banned);
+		}
+	});
+
+	test("every worker pool falls back to opencode-go DeepSeek at an effort it supports", () => {
+		const flash = "opencode-go/deepseek-v4.1-flash";
+		for (const [name, pool] of Object.entries(catalog.pools)) {
+			if (name === "plan-review") continue;
+			expect(pool.fallback.model).toBe(flash);
+			expect(catalog.models[flash].supports).toContain(pool.fallback.effort as string);
+		}
 	});
 
 	test("parses worker account pins from a local file, not the catalog", () => {
@@ -122,15 +147,15 @@ describe("catalog v9", () => {
 		expect(() => parseCatalog(wrongVersion)).toThrow("settings");
 
 		const missingPool = clone();
-		delete (missingPool.pools as Record<string, unknown>)["mechanical"];
+		delete (missingPool.pools as Record<string, unknown>)["investigation"];
 		expect(() => parseCatalog(missingPool)).toThrow("unknown pool");
 
 		const unknownPool = clone();
-		(unknownPool.taskTypes as Record<string, Record<string, unknown>>).code.pool = "nope";
+		(unknownPool.taskTypes as Record<string, Record<string, unknown>>).investigation.pool = "nope";
 		expect(() => parseCatalog(unknownPool)).toThrow("unknown pool");
 
 		const both = clone();
-		(both.taskTypes as Record<string, Record<string, unknown>>).code.model = "@lead";
+		(both.taskTypes as Record<string, Record<string, unknown>>).investigation.model = "@lead";
 		expect(() => parseCatalog(both)).toThrow("both a pool and a model");
 
 		const uncoveredAgentTaskType = clone();
@@ -190,7 +215,7 @@ describe("catalog v9", () => {
 		expect(() => parseCatalog(unknownReviewPool)).toThrow("unknown pool");
 
 		// Protected role aliases may serve lead/plan review, but not ordinary worker pools.
-		for (const pool of ["lead", "code", "mechanical"]) {
+		for (const pool of ["lead", "speed-moderate-difficulty", "cost-mechanical"]) {
 			const solAliasPool = clone();
 			(
 				((solAliasPool.pools as Record<string, Record<string, unknown>>)[pool].members as Array<Record<string, unknown>>)[0]
@@ -221,12 +246,16 @@ describe("catalog v9", () => {
 		).model = "openai-codex/gpt-6.2-sol";
 		expect(() => parseCatalog(solPlanReview)).not.toThrow();
 
-		// The fixed pools are not required; only task-type pool references must resolve.
-		const noFixedPools = clone();
-		delete (noFixedPools.pools as Record<string, unknown>)["mechanical"];
-		(noFixedPools.taskTypes as Record<string, Record<string, unknown>>).mechanical.pool = "code";
-		delete noFixedPools.experiment;
-		expect(() => parseCatalog(noFixedPools)).not.toThrow();
+		// Slot pools are named per mode; a slot pool missing from the pool table is rejected.
+		const unknownSlotPool = clone();
+		const unknownSlots = unknownSlotPool.slots as { pools: Record<string, Record<string, string>> };
+		unknownSlots.pools.speed.Mechanical = "nope";
+		expect(() => parseCatalog(unknownSlotPool)).toThrow("unknown pool");
+
+		const excludedSlotPool = clone();
+		const excludedSlots = excludedSlotPool.slots as { pools: Record<string, Record<string, string>> };
+		excludedSlots.pools.cost["Feature work"] = "plan-review";
+		expect(() => parseCatalog(excludedSlotPool)).toThrow("excluded pool");
 	});
 
 	test("rejects invalid or conflicting pool effort policies", () => {
@@ -244,6 +273,8 @@ describe("catalog v9", () => {
 
 describe("split-test experiment", () => {
 	const clone = (): Record<string, unknown> => structuredClone(catalogData) as Record<string, unknown>;
+	// A pool the shipped catalog keeps; fixtures add their own experiment block on top of it.
+	const POOL = "speed-moderate-difficulty";
 	const candidates = [
 		{ model: "openai-codex/gpt-6.1-terra", effort: "high" },
 		{ model: "anthropic/claude-sonnet-5-5", effort: "medium" },
@@ -252,7 +283,7 @@ describe("split-test experiment", () => {
 		name: "worker-split-2026-11",
 		enabled: true,
 		endsAt: "2026-12-15T00:00:00Z",
-		slots: [{ pools: ["code"], difficulties: ["hard"], candidates }],
+		slots: [{ pools: [POOL], difficulties: ["hard"], candidates }],
 		...overrides,
 	});
 	const withExperiment = (overrides: Record<string, unknown> = {}) => {
@@ -283,19 +314,19 @@ describe("split-test experiment", () => {
 			parseCatalog(
 				withExperiment({
 					slots: [
-						{ pools: ["code"], difficulties: ["hard"], candidates },
-						{ pools: ["code"], difficulties: ["hard"], candidates },
+						{ pools: [POOL], difficulties: ["hard"], candidates },
+						{ pools: [POOL], difficulties: ["hard"], candidates },
 					],
 				}),
 			),
 		).toThrow("repeats slot");
 		expect(() =>
-			parseCatalog(withExperiment({ slots: [{ pools: ["code"], difficulties: ["hard"], candidates: [candidates[0]] }] })),
+			parseCatalog(withExperiment({ slots: [{ pools: [POOL], difficulties: ["hard"], candidates: [candidates[0]] }] })),
 		).toThrow("experiment");
 		expect(() =>
 			parseCatalog(
 				withExperiment({
-					slots: [{ pools: ["code"], difficulties: ["hard"], candidates: [candidates[0], candidates[0]] }],
+					slots: [{ pools: [POOL], difficulties: ["hard"], candidates: [candidates[0], candidates[0]] }],
 				}),
 			),
 		).toThrow("experiment");
@@ -304,7 +335,7 @@ describe("split-test experiment", () => {
 				withExperiment({
 					slots: [
 						{
-							pools: ["code"],
+							pools: [POOL],
 							difficulties: ["hard"],
 							candidates: [{ model: "openai-codex/gpt-6.1-terra" }, candidates[1]],
 						},
@@ -317,7 +348,7 @@ describe("split-test experiment", () => {
 				withExperiment({
 					slots: [
 						{
-							pools: ["code"],
+							pools: [POOL],
 							difficulties: ["hard"],
 							candidates: [
 								{ model: "@frontier-2", effort: "low" },
@@ -334,15 +365,15 @@ describe("split-test experiment", () => {
 		const parsed = parseCatalog(withExperiment());
 		const beforeEnd = Date.parse("2026-12-14T00:00:00Z");
 		const afterEnd = Date.parse("2026-12-15T00:00:00Z");
-		expect(activeExperimentSlot(parsed, "code", "hard", beforeEnd)?.candidates).toEqual(candidates);
-		expect(activeExperimentSlot(parsed, "code", "ordinary", beforeEnd)).toBeUndefined();
-		expect(activeExperimentSlot(parsed, "lead", "hard", beforeEnd)).toBeUndefined();
-		expect(activeExperimentSlot(parsed, "code", "hard", afterEnd)).toBeUndefined();
+		expect(activeExperimentSlot(parsed, POOL, "hard", beforeEnd)?.candidates).toEqual(candidates);
+		expect(activeExperimentSlot(parsed, POOL, "ordinary", beforeEnd)).toBeUndefined();
+		expect(activeExperimentSlot(parsed, "speed-feature-work", "hard", beforeEnd)).toBeUndefined();
+		expect(activeExperimentSlot(parsed, POOL, "hard", afterEnd)).toBeUndefined();
 		const disabled = parseCatalog(withExperiment({ enabled: false }));
-		expect(activeExperimentSlot(disabled, "code", "hard", beforeEnd)).toBeUndefined();
+		expect(activeExperimentSlot(disabled, POOL, "hard", beforeEnd)).toBeUndefined();
 		const none = clone();
 		delete none.experiment;
-		expect(activeExperimentSlot(parseCatalog(none), "code", "hard", beforeEnd)).toBeUndefined();
+		expect(activeExperimentSlot(parseCatalog(none), POOL, "hard", beforeEnd)).toBeUndefined();
 	});
 
 	test("rotateCandidates starts at counter mod n", () => {
@@ -353,24 +384,11 @@ describe("split-test experiment", () => {
 		expect(rotateCandidates(items, -1)).toEqual(["d", "a", "b", "c"]);
 		expect(rotateCandidates([], 3)).toEqual([]);
 	});
-
-	test("the shipped catalog experiment lists a candidate set for every declared slot", () => {
-		const parsed = parseCatalog(catalogData);
-		expect(parsed.experiment).toBeDefined();
-		const beforeEnd = Date.parse(parsed.experiment!.endsAt) - 1;
-		for (const slot of parsed.experiment!.slots) {
-			for (const pool of slot.pools) {
-				for (const difficulty of slot.difficulties) {
-					expect(activeExperimentSlot(parsed, pool, difficulty, beforeEnd)?.candidates).toEqual(slot.candidates);
-				}
-			}
-		}
-	});
 });
 
 describe("effort resolution", () => {
 	test("maps difficulty per model with a `*` fallback", () => {
-		expect(modelDifficultyEffort(catalog, "anthropic/claude-sonnet-5-5", "critical")).toBe("low");
+		expect(modelDifficultyEffort(catalog, "anthropic/claude-sonnet-5-5", "critical")).toBe("xhigh");
 		expect(modelDifficultyEffort(catalog, "xai-oauth/grok-4.6", "ordinary")).toBe("high");
 		expect(modelDifficultyEffort(catalog, "no-such/model", "hard")).toBe("high");
 		expect(modelDifficultyEffort(catalog, "no-such/model", "ordinary")).toBe("medium");
@@ -380,8 +398,9 @@ describe("effort resolution", () => {
 		expect(clampEffort("xhigh", ["medium", "high"])).toBe("high");
 		expect(clampEffort("low", ["medium", "high"])).toBe("medium");
 		expect(clampEffort("high", undefined)).toBe("high");
-		expect(capEffort(catalog, "anthropic/claude-sonnet-5-5", "xhigh")).toBe("low");
-		expect(capEffort(catalog, "anthropic/claude-sonnet-5-5", "low")).toBe("low");
+		expect(capEffort(catalog, "anthropic/claude-haiku-5-5", "max")).toBe("xhigh");
+		expect(capEffort(catalog, "anthropic/claude-haiku-5-5", "low")).toBe("low");
+		expect(capEffort(catalog, "anthropic/claude-sonnet-5-5", "xhigh")).toBe("xhigh");
 		expect(capEffort(catalog, "xai-oauth/grok-4.6", "xhigh")).toBe("xhigh");
 		expect(capEffort(catalog, "no-such/model", "max")).toBe("max");
 		expect(fitEffort("xhigh", ["low", "high"])).toBe("high");
@@ -392,15 +411,18 @@ describe("effort resolution", () => {
 		expect(effortForModel(catalog, "xai-oauth/grok-4.6", "hard", ["low", "high"])).toBe("high");
 	});
 
-	test("caps a pinned effort at the model's catalog maxEffort", () => {
-		// Sonnet's map already resolves hard work to low; a pool member pinning high is capped too.
-		expect(effortForModel(catalog, "anthropic/claude-sonnet-5-5", "critical", ["high", "xhigh"])).toBe("low");
-		expect(capEffort(catalog, "anthropic/claude-sonnet-5-5", "max")).toBe("low");
+	test("caps a resolved effort at the model's catalog maxEffort", () => {
+		// Haiku's catalog maxEffort is xhigh, so a critical rating and a max request both land at xhigh.
+		expect(effortForModel(catalog, "anthropic/claude-haiku-5-5", "critical", ["high", "xhigh"])).toBe("xhigh");
+		expect(capEffort(catalog, "anthropic/claude-haiku-5-5", "max")).toBe("xhigh");
 	});
 
 	test("knows which task types depend on the difficulty rating", () => {
-		expect(taskTypeEffortVaries(catalog, "mechanical")).toBe(true);
-		expect(taskTypeEffortVaries(catalog, "code")).toBe(true);
+		// Slot task types take their model and effort from the slot, so difficulty never moves them.
+		expect(taskTypeEffortVaries(catalog, "mechanical")).toBe(false);
+		expect(taskTypeEffortVaries(catalog, "code")).toBe(false);
+		expect(taskTypeEffortVaries(catalog, "scout")).toBe(false);
+		expect(taskTypeEffortVaries(catalog, "investigation")).toBe(true);
 		expect(taskTypeEffortVaries(catalog, "lead")).toBe(true);
 		expect(taskTypeEffortVaries(catalog, "plan-review")).toBe(true);
 		expect(taskTypeEffortVaries(catalog, "unknown")).toBe(false);
@@ -679,6 +701,53 @@ describe("pool ranking", () => {
 		const skipped = rankPool([ungated], usage, new Map(), [], pacedLimits, Date.now(), { skipWithoutGates: true });
 		expect(skipped.skipped).toContain(ungated.id);
 	});
+
+	test("Anthropic keeps a 5% weekly reserve in the final window", () => {
+		const sonnet = member("anthropic", "claude-sonnet-5-5", { penaltyKind: "weekly", minWeeklyHeadroom: 0.05 });
+		const untilReset = catalog.poolLimits.finalWindowMs - 60_000;
+		const status = (used: number) =>
+			rankPool(
+				[sonnet],
+				{ reports: [weeklyReport("anthropic", used, untilReset)], credentialCounts: {} },
+				new Map(),
+				[],
+				catalog.poolLimits,
+				Date.now(),
+			);
+		expect(status(0.96).skipped).toContain(sonnet.id);
+		expect(status(0.90).order).toContain(sonnet.id);
+		expect(status(0.90).skipped).not.toContain(sonnet.id);
+	});
+
+	test("OpenAI is not skipped for weekly use 0.97 in the final window", () => {
+		const sol = member("openai-codex", "gpt-6.1-sol", { penaltyKind: "weekly", minWeeklyHeadroom: 0 });
+		const untilReset = catalog.poolLimits.finalWindowMs - 60_000;
+		const ranked = rankPool(
+			[sol],
+			{ reports: [weeklyReport("openai-codex", 0.97, untilReset)], credentialCounts: {} },
+			new Map(),
+			[],
+			catalog.poolLimits,
+			Date.now(),
+		);
+		expect(ranked.skipped).not.toContain(sol.id);
+		expect(ranked.order).toContain(sol.id);
+	});
+
+	test("empty ignoreQuota paces OpenAI so over-skipAt Codex is skipped", () => {
+		expect(catalog.poolLimits.ignoreQuota).toEqual([]);
+		const sol = member("openai-codex", "gpt-6.1-sol", { penaltyKind: "weekly", minWeeklyHeadroom: 0 });
+		const ranked = rankPool(
+			[sol],
+			{ reports: [weeklyReport("openai-codex", 0.97, 24 * hour)], credentialCounts: {} },
+			new Map(),
+			[],
+			catalog.poolLimits,
+			Date.now(),
+		);
+		expect(ranked.skipped).toContain(sol.id);
+		expect(ranked.order).not.toContain(sol.id);
+	});
 });
 
 describe("catalog reloader", () => {
@@ -692,7 +761,7 @@ describe("catalog reloader", () => {
 			},
 			parseCatalog(catalogData),
 		);
-		expect(reloader.get().poolLimits.ignoreQuota).toEqual(["openai-codex"]);
+		expect(reloader.get().poolLimits.ignoreQuota).toEqual([]);
 
 		const next = structuredClone(catalogData) as { poolLimits: { ignoreQuota?: string[] } };
 		next.poolLimits.ignoreQuota = ["anthropic"];

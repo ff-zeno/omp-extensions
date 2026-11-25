@@ -15,6 +15,10 @@ interface JudgeRequest {
 }
 let judgeError: Error | undefined;
 let readinessChoice: "autonomous-plan" | "discuss-with-user" = "discuss-with-user";
+let slotChoice: string | undefined;
+let slotConfidence = 0.98;
+let slotAnswer: "ok" | "missing" | "invalid" = "ok";
+let slotProbabilities: Record<string, number> | undefined;
 let routeChoice: string | undefined;
 let routeConfidence = 0.98;
 let difficultyScore = 1;
@@ -41,6 +45,21 @@ judgeBridge.__intelligentAutoAgentsJudge = async (request: JudgeRequest) => {
 			confidence: routeConfidence,
 			probabilities: Object.fromEntries(options.map(option => [option, option === choice ? 1 : 0])),
 		};
+	}
+	if (request.questions.slot && slotAnswer !== "missing") {
+		if (slotAnswer === "invalid") {
+			answers.slot = { type: "choice", choice: "not-a-slot", confidence: 0.9, probabilities: { x: 1 } };
+		} else {
+			const options = Object.keys(request.questions.slot.criteria);
+			const choice = slotChoice && options.includes(slotChoice) ? slotChoice : options[1];
+			answers.slot = {
+				type: "choice",
+				choice,
+				confidence: slotConfidence,
+				probabilities:
+					slotProbabilities ?? Object.fromEntries(options.map(option => [option, option === choice ? 1 : 0])),
+			};
+		}
 	}
 	if (request.questions.difficulty) {
 		answers.difficulty = { type: "score", score: difficultyScore, confidence: difficultyConfidence, probabilities: {} };
@@ -88,11 +107,11 @@ const model = (id: string, efforts: string[], provider = "routing-test"): Routin
 const CHAT_MODEL = model("chat", ["low", "high", "xhigh"]);
 const OPUS = model("claude-opus-5-5", ["low", "medium", "high", "xhigh", "max"], "anthropic");
 const GROK = model("grok-4.6", ["low", "medium", "high", "xhigh"], "xai-oauth");
-const SOL = model("gpt-6.2-sol", ["low", "medium", "high", "xhigh", "max"], "openai-codex");
+const SOL = model("gpt-6.1-sol", ["low", "medium", "high", "xhigh", "max"], "openai-codex");
 const TERRA = model("gpt-6.1-terra", ["low", "medium", "high", "xhigh", "max"], "openai-codex");
 const LUNA = model("gpt-5.6-luna", ["low", "medium", "high", "xhigh", "max"], "openai-codex");
 const HAIKU = model("claude-haiku-5-5", ["low", "medium", "high", "xhigh", "max"], "anthropic");
-const DEEPSEEK = model("deepseek/deepseek-v4.1-flash-1017", ["low", "high", "max"], "openscale");
+const DEEPSEEK = model("deepseek-v4.1-flash", ["low", "high", "max"], "opencode-go");
 const DEFAULT_BINDINGS: Record<string, RoutingTestModel> = {
 	"@frontier-1": OPUS,
 	"@frontier-2": SOL,
@@ -105,10 +124,15 @@ const DEFAULT_BINDINGS: Record<string, RoutingTestModel> = {
 	"anthropic/claude-haiku-5-5": HAIKU,
 	"anthropic/claude-sonnet-5-5": model("claude-sonnet-5-5", ["low", "medium", "high", "xhigh", "max"], "anthropic"),
 	"xai-oauth/grok-4.6": GROK,
-	"openai-codex/gpt-6.2-sol": SOL,
+	"openai-codex/gpt-6.1-sol": SOL,
 	"openai-codex/gpt-6.1-terra": TERRA,
 	"openai-codex/gpt-5.6-luna": LUNA,
-	"openscale/deepseek/deepseek-v4.1-flash-1017": DEEPSEEK,
+	"opencode-go/deepseek-v4.1-flash": DEEPSEEK,
+	"xai-oauth/grok-4.7": model("grok-4.7", ["low", "medium", "high", "xhigh"], "xai-oauth"),
+	"opencode-go/hy4-flash-free": model("hy4-flash-free", ["low", "medium", "high"], "opencode-go"),
+	"anthropic/claude-fable-5-2": model("claude-fable-5-2", ["low", "medium", "high", "xhigh", "max"], "anthropic"),
+	"openscale/deepseek/deepseek-v4.1-flash-1017": model("deepseek/deepseek-v4.1-flash-1017", ["low", "high", "max"], "openscale"),
+	"openai-codex/gpt-6.2-astra": model("gpt-6.2-astra", ["low", "medium", "high", "xhigh", "max"], "openai-codex"),
 };
 
 interface Fixture {
@@ -129,6 +153,47 @@ function scratchDir(): string {
 	const dir = join(experimentScratch, String(++scratchCount));
 	mkdirSync(dir, { recursive: true });
 	return dir;
+}
+
+/** Shipped catalog plus a fixture-only experiment block; the shipped catalog carries none. */
+function splitTestCatalog(endsAt = "2999-01-01T00:00:00Z"): Catalog {
+	const data = structuredClone(catalogData) as typeof catalogData;
+	data.poolLimits.ignoreQuota = [];
+	return parseCatalog({
+		...data,
+		experiment: {
+			name: "split-test",
+			enabled: true,
+			endsAt,
+			slots: [
+				{
+					pools: ["speed-moderate-difficulty"],
+					difficulties: ["exact", "ordinary", "hard"],
+					candidates: [
+						{ model: "anthropic/claude-haiku-5-5", effort: "high" },
+						{ model: "openai-codex/gpt-6.1-terra", effort: "high" },
+						{ model: "openscale/deepseek/deepseek-v4.1-flash-1017", effort: "high" },
+						{ model: "xai-oauth/grok-4.6", effort: "high" },
+					],
+				},
+				{
+					pools: ["speed-moderate-difficulty"],
+					difficulties: ["critical"],
+					candidates: [
+						{ model: "anthropic/claude-sonnet-5-5", effort: "high" },
+						{ model: "openai-codex/gpt-6.1-terra", effort: "high" },
+					],
+				},
+			],
+		},
+	});
+}
+
+function catalogInMode(mode: "speed" | "cost"): Catalog {
+	const data = structuredClone(catalogData) as typeof catalogData;
+	data.mode = mode;
+	data.poolLimits.ignoreQuota = [];
+	return parseCatalog(data);
 }
 
 function createFixture(
@@ -171,9 +236,7 @@ function createFixture(
 	if (options.catalog) {
 		setCatalogForTests(options.catalog);
 	} else if (options.experiment) {
-		const data = structuredClone(catalogData) as typeof catalogData;
-		data.poolLimits.ignoreQuota = [];
-		setCatalogForTests(parseCatalog(data));
+		setCatalogForTests(splitTestCatalog());
 	} else {
 		const data = structuredClone(catalogData) as typeof catalogData & { experiment?: { enabled: boolean } };
 		if (data.experiment) data.experiment.enabled = false;
@@ -260,6 +323,10 @@ function decisionData(fixture: Fixture): Record<string, unknown> {
 function reset(): void {
 	judgeError = undefined;
 	readinessChoice = "discuss-with-user";
+	slotChoice = undefined;
+	slotConfidence = 0.98;
+	slotAnswer = "ok";
+	slotProbabilities = undefined;
 	routeChoice = undefined;
 	routeConfidence = 0.98;
 	difficultyScore = 1;
@@ -356,11 +423,17 @@ describe("intelligent auto-agents runtime", () => {
 
 		const result = await spawn(fixture);
 
-		expect(result).toMatchObject({ thinkingLevel: "medium" });
-		expect(result.model).toEqual(["openai-codex/gpt-6.1-terra", "anthropic/claude-sonnet-5-5:low", "xai-oauth/grok-4.6:high"]);
+		expect(result).toMatchObject({ thinkingLevel: "low" });
+		expect(result.model).toEqual([
+			"anthropic/claude-sonnet-5-5",
+			"openai-codex/gpt-6.1-terra:high",
+			"xai-oauth/grok-4.6:low",
+			"opencode-go/hy4-flash-free:low",
+			"opencode-go/deepseek-v4.1-flash:low",
+		]);
 		const data = decisionData(fixture);
-		expect(data).toMatchObject({ slot: "code", difficulty: "ordinary" });
-		expect(data.pool).toMatchObject({ active: "openai-codex/gpt-6.1-terra" });
+		expect(data).toMatchObject({ codingSlot: "Moderate difficulty", difficulty: "ordinary" });
+		expect(data.pool).toMatchObject({ active: "anthropic/claude-sonnet-5-5" });
 		expect(JSON.stringify(data)).not.toContain("ASSIGNMENT_TEXT");
 		expect(judgeRequests[0].state).toContain("Routing guidance:");
 	});
@@ -396,43 +469,40 @@ describe("intelligent auto-agents runtime", () => {
 
 	test("case: DLG-001 routes bounded scout evidence through economical mechanical work", async () => {
 		reset();
-		routeChoice = "mechanical";
 		difficultyScore = 0;
 		const fixture = createFixture({ usageReports: ON_PACE });
 		const result = await spawn(fixture, { agent: "scout" });
 
-		expect(result).toMatchObject({ thinkingLevel: "xhigh" });
-		expect(result.model[0]).toBe("openai-codex/gpt-5.6-luna");
-		expect(decisionData(fixture)).toMatchObject({ slot: "mechanical", difficulty: "exact" });
-		reset();
-		routeChoice = "mechanical";
-		difficultyScore = 1;
-		const ordinaryFixture = createFixture({ usageReports: ON_PACE });
-		const ordinaryResult = await spawn(ordinaryFixture, { agent: "scout" });
-		expect(ordinaryResult).toMatchObject({ thinkingLevel: "xhigh" });
-		expect(ordinaryResult.model[0]).toBe("openai-codex/gpt-5.6-luna");
-		expect(decisionData(ordinaryFixture)).toMatchObject({ slot: "mechanical", difficulty: "ordinary" });
-
+		// Scout is fixed to the Mechanical slot and never asked for difficulty, so Speed's mechanical pool serves it.
+		expect(result).toMatchObject({ thinkingLevel: "low" });
+		expect(result.model).toEqual([
+			"anthropic/claude-sonnet-5-5",
+			"openai-codex/gpt-6.1-terra:low",
+			"xai-oauth/grok-4.6:low",
+			"opencode-go/hy4-flash-free:high",
+			"opencode-go/deepseek-v4.1-flash:high",
+		]);
+		expect(decisionData(fixture).pool).toMatchObject({ active: "anthropic/claude-sonnet-5-5" });
+		expect(judgeCalls).toBe(0);
 	});
 
 	test("case: DLG-003 blocks a scout asked to make architecture or root-cause judgments", async () => {
 		reset();
-		routeChoice = "lead";
-		difficultyScore = 1;
-		const wrongJobFixture = createFixture({ usageReports: ON_PACE });
-		const wrongJobResult = await spawn(wrongJobFixture, { agent: "scout" });
-		expect(wrongJobResult).toMatchObject({ block: true });
-		expect(wrongJobResult.reason).toMatch(/reframe/i);
-		expect(decisionData(wrongJobFixture)).toMatchObject({ choice: "lead", difficulty: "ordinary" });
+		const leadJob = await spawn(createFixture({ usageReports: ON_PACE }), { agent: "scout", assignment: "Directive: use investigation" });
+		expect(leadJob).toMatchObject({ block: true });
+		expect(leadJob.reason).toMatch(/reframe/i);
 
 		reset();
-		routeChoice = "mechanical";
-		difficultyScore = 2;
-		const wrongDifficultyFixture = createFixture({ usageReports: ON_PACE });
-		const wrongDifficultyResult = await spawn(wrongDifficultyFixture, { agent: "scout" });
-		expect(wrongDifficultyResult).toMatchObject({ block: true });
-		expect(wrongDifficultyResult.reason).toMatch(/reframe/i);
-		expect(decisionData(wrongDifficultyFixture)).toMatchObject({ choice: "mechanical", difficulty: "hard" });
+		const codeJob = await spawn(createFixture({ usageReports: ON_PACE }), { agent: "scout", assignment: "Directive: use code" });
+		expect(codeJob).toMatchObject({ block: true });
+		expect(codeJob.reason).toMatch(/reframe/i);
+
+		reset();
+		const mechanicalJob = await spawn(createFixture({ usageReports: ON_PACE }), {
+			agent: "scout",
+			assignment: "Directive: use mechanical",
+		});
+		expect(mechanicalJob.block).toBeUndefined();
 	});
 
 	test("case: DLG-004 blocks uncertain automatic type or difficulty for parent clarification", async () => {
@@ -445,18 +515,19 @@ describe("intelligent auto-agents runtime", () => {
 		expect(typeResult.reason).toContain("Parent clarification required");
 
 		reset();
-		routeChoice = "code";
+		routeChoice = "lead";
 		difficultyConfidence = 0.4;
 		const uncertainDifficulty = createFixture({ usageReports: ON_PACE });
 		const difficultyResult = await spawn(uncertainDifficulty);
 		expect(difficultyResult).toMatchObject({ block: true });
 		expect(difficultyResult.reason).toContain("Parent clarification required");
-		expect(decisionData(uncertainDifficulty)).toMatchObject({ choice: "code", reason: "uncertain-difficulty" });
+		expect(decisionData(uncertainDifficulty)).toMatchObject({ choice: "lead", reason: "uncertain-difficulty" });
 
+		// A slot task type (code) asks no difficulty, so only a difficulty-rated task type can block on it.
 		reset();
 		difficultyConfidence = 0.4;
 		const taskTypeDirective = createFixture({ usageReports: ON_PACE });
-		const directiveResult = await spawn(taskTypeDirective, { assignment: "Directive: use code" });
+		const directiveResult = await spawn(taskTypeDirective, { assignment: "Directive: use investigation" });
 		expect(directiveResult).toMatchObject({ block: true });
 		expect(directiveResult.reason).toContain("Parent clarification required");
 		expect(decisionData(taskTypeDirective)).toMatchObject({ source: "baseline", reason: "uncertain-difficulty" });
@@ -473,9 +544,9 @@ describe("intelligent auto-agents runtime", () => {
 		routeConfidence = 0.98;
 		difficultyConfidence = 0.9;
 		const result = await spawn(fixture);
-		expect(result).toMatchObject({ thinkingLevel: "medium" });
+		expect(result).toMatchObject({ thinkingLevel: "low" });
 		expect(result.block).toBeUndefined();
-		expect(decisionData(fixture)).toMatchObject({ slot: "code", difficulty: "ordinary" });
+		expect(decisionData(fixture)).toMatchObject({ codingSlot: "Moderate difficulty" });
 	});
 
 	test("case: DLG-006 declines all automatic medium/slow selectors as chat-only", async () => {
@@ -518,7 +589,7 @@ describe("intelligent auto-agents runtime", () => {
 		expect(decisionData(fixture).reason).toBe("routing-unavailable");
 	});
 
-	test("case: DLG-008 ignores Codex quota reports in the spawn hook", async () => {
+	test("case: DLG-008 applies Codex quota gates in the spawn hook when no provider is ignored", async () => {
 		reset();
 		routeChoice = "code";
 		difficultyScore = 1;
@@ -528,12 +599,13 @@ describe("intelligent auto-agents runtime", () => {
 		});
 		const result = await spawn(fixture);
 
+		// Every frontier-tier member over quota is skipped; the speed pool's OpenCode members serve the job.
 		expect(result).toMatchObject({
-			model: ["openai-codex/gpt-6.1-terra", "openscale/deepseek/deepseek-v4.1-flash-1017:low"],
-			thinkingLevel: "medium",
+			model: ["opencode-go/hy4-flash-free", "opencode-go/deepseek-v4.1-flash:low"],
+			thinkingLevel: "low",
 		});
 		expect(decisionData(fixture).pool).toMatchObject({
-			verdicts: { "openai-codex/gpt-6.1-terra": { status: "eligible" } },
+			verdicts: { "openai-codex/gpt-6.1-terra": { status: "skipped" } },
 		});
 	});
 
@@ -548,10 +620,10 @@ describe("intelligent auto-agents runtime", () => {
 	] as const) {
 		for (const [condition, weeklyUsed, codexUsed, xaiUsed, stage] of [
 			["healthy", 0.05, 0.1, 0.1, 0],
-			["weekly headroom at minimum", 0.1, 0.1, 0.1, 0],
-			["weekly headroom below minimum", 0.11, 0.1, 0.1, 1],
-			["Anthropic gated, Codex gated", 0.11, 0.99, 0.1, 2],
-			["Anthropic, Codex, and xAI gated", 0.11, 0.99, 0.99, 3],
+			["weekly headroom at minimum", 0.15, 0.1, 0.1, 0],
+			["weekly headroom below minimum", 0.16, 0.1, 0.1, 1],
+			["Anthropic gated, Codex gated", 0.16, 0.99, 0.1, 2],
+			["Anthropic, Codex, and xAI gated", 0.16, 0.99, 0.99, 3],
 		] as const) {
 			test(`${taskType} ${difficulty} routes with ${condition}`, async () => {
 				reset();
@@ -567,7 +639,7 @@ describe("intelligent auto-agents runtime", () => {
 				});
 				const result = await spawn(fixture, { agent });
 				const opus = "anthropic/claude-opus-5-5";
-				const sol = "openai-codex/gpt-6.2-sol";
+				const sol = "openai-codex/gpt-6.1-sol";
 				const grok = "xai-oauth/grok-4.6";
 				const activeEffort = stage === 0 || stage === 1 ? primaryEffort : stage === 2 ? grokEffort : "high";
 				expect(result.thinkingLevel).toBe(activeEffort);
@@ -575,7 +647,7 @@ describe("intelligent auto-agents runtime", () => {
 					stage === 0 ? [opus, `${sol}:${primaryEffort}`, `${grok}:${grokEffort}`]
 					: stage === 1 ? [`${sol}`, `${grok}:${grokEffort}`]
 					: stage === 2 ? [grok]
-					: ["openscale/deepseek/deepseek-v4.1-flash-1017"],
+					: ["opencode-go/deepseek-v4.1-flash"],
 				);
 			});
 		}
@@ -591,7 +663,7 @@ describe("intelligent auto-agents runtime", () => {
 			usageReports: [usage("anthropic", 0.99), usage("xai-oauth"), usage("openai-codex")],
 		});
 		expect(await spawn(fixture, { agent: "plan" })).toMatchObject({
-			model: ["xai-oauth/grok-4.6", "openai-codex/gpt-6.2-sol:high"], thinkingLevel: "medium",
+			model: ["xai-oauth/grok-4.6", "openai-codex/gpt-6.1-sol:high"], thinkingLevel: "medium",
 		});
 
 		reset();
@@ -603,7 +675,7 @@ describe("intelligent auto-agents runtime", () => {
 		});
 		// Sol supports max, but the third frontier's uplift must still stop at the task ceiling.
 		expect(await spawn(capped)).toMatchObject({
-			model: ["openai-codex/gpt-6.2-sol"], thinkingLevel: "xhigh",
+			model: ["openai-codex/gpt-6.1-sol"], thinkingLevel: "xhigh",
 		});
 	});
 
@@ -616,7 +688,7 @@ describe("intelligent auto-agents runtime", () => {
 			usageReports: [usage("anthropic", 0.99), usage("openai-codex"), usage("xai-oauth")],
 		});
 		expect(await spawn(fixture)).toMatchObject({
-			model: ["openai-codex/gpt-6.2-sol", "xai-oauth/grok-4.6:medium"], thinkingLevel: "low",
+			model: ["openai-codex/gpt-6.1-sol", "xai-oauth/grok-4.6:xhigh"], thinkingLevel: "high",
 		});
 	});
 
@@ -630,7 +702,7 @@ describe("intelligent auto-agents runtime", () => {
 			usageReports: [usage("anthropic", 0.99), usage("openai-codex"), usage("xai-oauth")],
 		});
 		expect(await spawn(fixture, { agent: "plan" })).toMatchObject({
-			model: ["openai-codex/gpt-6.2-sol", "xai-oauth/grok-rebound:high"], thinkingLevel: "medium",
+			model: ["openai-codex/gpt-6.1-sol", "xai-oauth/grok-rebound:high"], thinkingLevel: "medium",
 		});
 	});
 
@@ -642,7 +714,7 @@ describe("intelligent auto-agents runtime", () => {
 		delete bindings["@frontier-1"];
 		const fixture = createFixture({ bindings, usageReports: ON_PACE });
 		expect(await spawn(fixture)).toMatchObject({
-			model: ["openscale/deepseek/deepseek-v4.1-flash-1017"], thinkingLevel: "high",
+			model: ["opencode-go/deepseek-v4.1-flash"], thinkingLevel: "high",
 		});
 	});
 
@@ -666,52 +738,48 @@ describe("intelligent auto-agents runtime", () => {
 			suppressedSelectors: ["anthropic/claude-opus-5-5:xhigh"],
 		});
 		expect(await spawn(fixture)).toMatchObject({
-			model: ["openai-codex/gpt-6.2-sol", "xai-oauth/grok-4.6:xhigh"],
+			model: ["openai-codex/gpt-6.1-sol", "xai-oauth/grok-4.6:xhigh"],
 			thinkingLevel: "xhigh",
 		});
 		expect(decisionData(fixture).rollover).toEqual({
 			from: "anthropic/claude-opus-5-5",
-			to: "openai-codex/gpt-6.2-sol",
+			to: "openai-codex/gpt-6.1-sol",
 		});
 	});
 
 	test("rolls over across providers, not across models of one provider", async () => {
 		reset();
-		difficultyScore = 0;
 		routeChoice = "code";
-		// An exhausted Codex quota skips Luna; Anthropic is next, without trying Sonnet or Opus.
+		// An exhausted Codex quota skips Terra; the pool's next member is Sonnet on Anthropic.
 		const codexOut = await spawn(
 			createFixture({ usageReports: [usage("anthropic"), usage("xai-oauth"), usage("openai-codex", 0.99)] }),
 		);
-		expect(codexOut).toMatchObject({ model: ["anthropic/claude-haiku-5-5", "xai-oauth/grok-4.6:low"], thinkingLevel: "xhigh" });
+		expect(codexOut).toMatchObject({
+			model: ["anthropic/claude-sonnet-5-5", "xai-oauth/grok-4.6:low", "opencode-go/hy4-flash-free:low", "opencode-go/deepseek-v4.1-flash:low"],
+			thinkingLevel: "low",
+		});
 
 		reset();
-		difficultyScore = 0;
 		routeChoice = "code";
+		// Anthropic and xAI exhausted: Terra is the first Codex model still eligible and is not replaced by another Codex model.
 		const twoOut = await spawn(
 			createFixture({ usageReports: [usage("anthropic", 0.99), usage("xai-oauth", 0.99), usage("openai-codex")] }),
 		);
-		expect(twoOut).toMatchObject({ model: ["openai-codex/gpt-5.6-luna"], thinkingLevel: "max" });
+		expect(twoOut).toMatchObject({
+			model: ["openai-codex/gpt-6.1-terra", "opencode-go/hy4-flash-free:low", "opencode-go/deepseek-v4.1-flash:low"],
+			thinkingLevel: "high",
+		});
 
 		reset();
-		difficultyScore = 2;
 		routeChoice = "code";
-		const hard = await spawn(createFixture({ usageReports: [usage("anthropic", 0.99), usage("xai-oauth", 0.99), usage("openai-codex")] }));
-		expect(hard).toMatchObject({ model: ["openai-codex/gpt-6.2-sol"], thinkingLevel: "low" });
-
-		reset();
-		difficultyScore = 2;
-		routeChoice = "code";
-		// Anthropic, xAI, and exhausted Codex are all skipped.
-		const threeOut = [usage("anthropic", 0.99), usage("xai-oauth", 0.99), usage("openai-codex", 0.99)];
-		// With every quota-gated member out, the pool uses its DeepSeek fallback.
-		const allOutOptions = { usageReports: threeOut };
+		const allOutOptions = { usageReports: [usage("anthropic", 0.99), usage("xai-oauth", 0.99), usage("openai-codex", 0.99)] };
+		// Demote Anthropic's first Moderate member; the next served model is Codex Terra, not another Anthropic model.
 		for (const sessionId of ["demote-1", "demote-2"]) {
-			const routed = createFixture(allOutOptions);
+			const routed = createFixture({ usageReports: ON_PACE });
 			await spawn(routed);
 			const child = createFixture({
 				agent: { kind: "sub", name: "task", depth: 1 },
-				model: SOL,
+				model: DEFAULT_BINDINGS["anthropic/claude-sonnet-5-5"],
 				sessionId,
 			});
 			child.hooks.agent_end?.(
@@ -719,45 +787,55 @@ describe("intelligent auto-agents runtime", () => {
 				child.ctx,
 			);
 		}
-		const allOut = await spawn(createFixture(allOutOptions));
-		expect(allOut).toMatchObject({ model: ["openscale/deepseek/deepseek-v4.1-flash-1017"], thinkingLevel: "high" });
+		const afterDemote = await spawn(createFixture({ usageReports: ON_PACE }));
+		expect(afterDemote).toMatchObject({
+			model: ["openai-codex/gpt-6.1-terra", "xai-oauth/grok-4.6:low", "opencode-go/hy4-flash-free:low", "opencode-go/deepseek-v4.1-flash:low"],
+			thinkingLevel: "high",
+		});
 
 		reset();
-		difficultyScore = 2;
 		routeChoice = "mechanical";
 		expect(await spawn(createFixture(allOutOptions))).toMatchObject({
-			model: ["openscale/deepseek/deepseek-v4.1-flash-1017"], thinkingLevel: "low",
+			model: ["opencode-go/hy4-flash-free", "opencode-go/deepseek-v4.1-flash:high"],
+			thinkingLevel: "high",
 		});
 
 		reset();
 		difficultyScore = 2;
 		routeChoice = "review";
 		expect(await spawn(createFixture(allOutOptions), { agent: "reviewer" })).toMatchObject({
-			model: ["openscale/deepseek/deepseek-v4.1-flash-1017"], thinkingLevel: "high",
+			model: ["opencode-go/deepseek-v4.1-flash"],
+			thinkingLevel: "high",
 		});
 	});
 
-	test("hard code keeps Sol first on pace and alone when others are over weekly pace", async () => {
+	test("feature work keeps Sol first on pace and alone when others are over weekly pace", async () => {
 		reset();
-		difficultyScore = 2;
+		slotChoice = "Feature work";
 		routeChoice = "code";
 		const onPace = await spawn(createFixture({ usageReports: ON_PACE }));
 		expect(onPace).toMatchObject({
-			model: ["openai-codex/gpt-6.2-sol", "anthropic/claude-opus-5-5:medium", "xai-oauth/grok-4.6:high"],
-			thinkingLevel: "low",
+			model: [
+				"anthropic/claude-sonnet-5-5",
+				"openai-codex/gpt-6.1-sol:medium",
+				"xai-oauth/grok-4.6:high",
+				"opencode-go/hy4-flash-free:high",
+				"opencode-go/deepseek-v4.1-flash:low",
+			],
+			thinkingLevel: "high",
 		});
 
 		reset();
-		difficultyScore = 2;
+		slotChoice = "Feature work";
 		routeChoice = "code";
 		// Anthropic/xAI are over weekly pace; Codex remains on pace and is eligible.
 		const overPace = [usage("anthropic", 0.5), usage("xai-oauth", 0.5), usage("openai-codex", 0.1)];
 		const fixture = createFixture({ usageReports: overPace });
 		expect(await spawn(fixture)).toMatchObject({
-			model: ["openai-codex/gpt-6.2-sol"],
-			thinkingLevel: "low",
+			model: ["openai-codex/gpt-6.1-sol", "opencode-go/hy4-flash-free:high", "opencode-go/deepseek-v4.1-flash:low"],
+			thinkingLevel: "medium",
 		});
-		expect(decisionData(fixture).pool).toMatchObject({ active: "openai-codex/gpt-6.2-sol" });
+		expect(decisionData(fixture).pool).toMatchObject({ active: "openai-codex/gpt-6.1-sol" });
 	});
 
 	for (const [difficulty, level, solEffort] of [
@@ -771,14 +849,14 @@ describe("intelligent auto-agents runtime", () => {
 			difficultyScore = level;
 			routeChoice = "review";
 			const onPace = await spawn(createFixture({ usageReports: ON_PACE }), { agent: "reviewer" });
-			expect(onPace.model.at(-1)).toBe(`openai-codex/gpt-6.2-sol:${solEffort}`);
+			expect(onPace.model.at(-1)).toBe(`openai-codex/gpt-6.1-sol:${solEffort}`);
 
 			reset();
 			difficultyScore = level;
 			routeChoice = "review";
 			const overPace = [usage("anthropic", 0.5), usage("xai-oauth", 0.5), usage("openai-codex", 0.1)];
 			expect(await spawn(createFixture({ usageReports: overPace }), { agent: "reviewer" })).toMatchObject({
-				model: ["openai-codex/gpt-6.2-sol"],
+				model: ["openai-codex/gpt-6.1-sol"],
 				thinkingLevel: solEffort,
 			});
 		});
@@ -790,9 +868,18 @@ describe("intelligent auto-agents runtime", () => {
 		routeChoice = "lead";
 		const fixture = createFixture({ usageReports: ON_PACE });
 		const result = await spawn(fixture, { agent: "git" });
-		expect(result).toMatchObject({ model: ["openai-codex/gpt-5.6-luna", "anthropic/claude-haiku-5-5:xhigh", "xai-oauth/grok-4.6:low"], thinkingLevel: "xhigh" });
-		expect(decisionData(fixture)).toMatchObject({ slot: "commit", difficulty: "exact" });
-		expect(judgeRequests[0].questions.route).toBeUndefined();
+		expect(result).toMatchObject({
+			model: [
+				"anthropic/claude-sonnet-5-5",
+				"openai-codex/gpt-6.1-terra:low",
+				"xai-oauth/grok-4.6:low",
+				"opencode-go/hy4-flash-free:high",
+				"opencode-go/deepseek-v4.1-flash:high",
+			],
+			thinkingLevel: "low",
+		});
+		expect(decisionData(fixture)).toMatchObject({ slot: "commit" });
+		expect(judgeCalls).toBe(0);
 
 		reset();
 		difficultyScore = 0;
@@ -808,7 +895,7 @@ describe("intelligent auto-agents runtime", () => {
 		const fixture = createFixture();
 		const result = await spawn(fixture, { assignment: "Do it\nDirective: use frontier-2\n" });
 
-		expect(result).toMatchObject({ model: ["openai-codex/gpt-6.2-sol"], thinkingLevel: "medium" });
+		expect(result).toMatchObject({ model: ["openai-codex/gpt-6.1-sol"], thinkingLevel: "medium" });
 		expect(decisionData(fixture)).toMatchObject({ directive: "Directive: use frontier-2" });
 		expect(judgeRequests[0].questions.route).toBeUndefined();
 		expect(judgeCalls).toBe(1);
@@ -890,7 +977,7 @@ describe("intelligent auto-agents runtime", () => {
 			const fixture = createFixture({ cwd: dir });
 			const result = await spawn(fixture, { agent: "reviewer", assignment: "Review the plan at plan.md" });
 
-			expect(result.model[0]).toBe("openai-codex/gpt-6.2-sol");
+			expect(result.model[0]).toBe("openai-codex/gpt-6.1-sol");
 			expect(result.model).not.toContain("xai-oauth/grok-4.6");
 			expect(result.note ?? "").toContain("plan authors excluded");
 		} finally {
@@ -908,7 +995,7 @@ describe("intelligent auto-agents runtime", () => {
 			mkdirSync(localDir, { recursive: true });
 			writeFileSync(
 				join(localDir, "plan.md"),
-				["---", "plan:", "  authored-by:", "    - model: openai-codex/gpt-6.2-sol", "  reviews:", "    - model: anthropic/claude-opus-5-5", "---", "# Plan"].join("\n"),
+				["---", "plan:", "  authored-by:", "    - model: openai-codex/gpt-6.1-sol", "  reviews:", "    - model: anthropic/claude-opus-5-5", "---", "# Plan"].join("\n"),
 			);
 			const fixture = createFixture({ artifactsDir: dir });
 			const result = await spawn(fixture, { agent: "reviewer", assignment: "Review local://plan.md" });
@@ -994,14 +1081,14 @@ describe("intelligent auto-agents runtime", () => {
 		reset();
 		difficultyScore = 0;
 		routeChoice = "code";
-		// Luna is suppressed at its pinned effort, so exact work rolls over to the next provider.
+		// Sonnet is suppressed at its pinned effort, so exact work rolls over to the next provider.
 		const fixture = createFixture({
 			usageReports: ON_PACE,
-			suppressedSelectors: ["openai-codex/gpt-5.6-luna:max"],
+			suppressedSelectors: ["anthropic/claude-sonnet-5-5:low"],
 		});
 		const result = await spawn(fixture);
-		expect(result.model[0]).toBe("anthropic/claude-haiku-5-5");
-		expect(decisionData(fixture).rollover).toMatchObject({ from: "openai-codex/gpt-5.6-luna" });
+		expect(result.model[0]).toBe("openai-codex/gpt-6.1-terra");
+		expect(decisionData(fixture).rollover).toMatchObject({ from: "anthropic/claude-sonnet-5-5" });
 	});
 
 	test("usage fetch failure still routes through the declared pool order", async () => {
@@ -1009,7 +1096,7 @@ describe("intelligent auto-agents runtime", () => {
 		routeChoice = "code";
 		const fixture = createFixture({ usageError: new Error("usage unavailable") });
 		const result = await spawn(fixture);
-		expect(result.model[0]).toBe("openai-codex/gpt-6.1-terra");
+		expect(result.model[0]).toBe("anthropic/claude-sonnet-5-5");
 		expect(decisionData(fixture).pool).toMatchObject({ status: "no-usage" });
 	});
 
@@ -1066,6 +1153,190 @@ describe("intelligent auto-agents runtime", () => {
 	});
 });
 
+describe("slot routing outcomes", () => {
+	for (const [mode, slot, model, effort] of [
+		["speed", "Mechanical", "anthropic/claude-sonnet-5-5", "low"],
+		["speed", "Moderate difficulty", "anthropic/claude-sonnet-5-5", "low"],
+		["speed", "Feature work", "anthropic/claude-sonnet-5-5", "high"],
+		["cost", "Mechanical", "anthropic/claude-haiku-5-5", "low"],
+		["cost", "Moderate difficulty", "anthropic/claude-haiku-5-5", "high"],
+		["cost", "Feature work", "anthropic/claude-haiku-5-5", "high"],
+	] as const) {
+		test(`${mode} ${slot} starts on the slot's first member`, async () => {
+			reset();
+			routeChoice = "code";
+			slotChoice = slot;
+			const fixture = createFixture({
+				usageReports: ON_PACE,
+				...(mode === "cost" ? { catalog: catalogInMode("cost") } : {}),
+			});
+			const result = await spawn(fixture);
+			expect(result.block).toBeUndefined();
+			expect(result.model[0]).toBe(model);
+			expect(result.thinkingLevel).toBe(effort);
+		});
+	}
+
+	test("a low-confidence slot answer takes the higher of the two likeliest and does not block", async () => {
+		reset();
+		routeChoice = "code";
+		slotChoice = "Moderate difficulty";
+		slotConfidence = 0.5;
+		slotProbabilities = {
+			Mechanical: 0.2,
+			"Moderate difficulty": 0.45,
+			"Feature work": 0.35,
+		};
+		const fixture = createFixture({ usageReports: ON_PACE });
+		const result = await spawn(fixture);
+		expect(result.block).toBeUndefined();
+		expect(result.model[0]).toBe("anthropic/claude-sonnet-5-5");
+		expect(result.thinkingLevel).toBe("high");
+	});
+
+	for (const answer of ["missing", "invalid"] as const) {
+		test(`${answer} slot answer uses Feature work and does not block`, async () => {
+			reset();
+			routeChoice = "code";
+			slotAnswer = answer;
+			const fixture = createFixture({ usageReports: ON_PACE });
+			const result = await spawn(fixture);
+			expect(result.block).toBeUndefined();
+			expect(result.model[0]).toBe("anthropic/claude-sonnet-5-5");
+			expect(result.thinkingLevel).toBe("high");
+		});
+	}
+
+	for (const agent of ["git", "scout"] as const) {
+		test(`${agent} uses the Mechanical slot pool`, async () => {
+			reset();
+			const fixture = createFixture({ usageReports: ON_PACE });
+			const result = await spawn(fixture, { agent });
+			expect(result.block).toBeUndefined();
+			expect(result).toMatchObject({
+				model: [
+					"anthropic/claude-sonnet-5-5",
+					"openai-codex/gpt-6.1-terra:low",
+					"xai-oauth/grok-4.6:low",
+					"opencode-go/hy4-flash-free:high",
+					"opencode-go/deepseek-v4.1-flash:high",
+				],
+				thinkingLevel: "low",
+			});
+		});
+	}
+
+	for (const [difficulty, level, first, effort] of [
+		["exact", 0, "anthropic/claude-sonnet-5-5", "high"],
+		["ordinary", 1, "anthropic/claude-sonnet-5-5", "high"],
+		["hard", 2, "anthropic/claude-opus-5-5", "high"],
+		["critical", 3, "anthropic/claude-opus-5-5", "high"],
+	] as const) {
+		test(`investigation ${difficulty} starts on ${first} at ${effort}`, async () => {
+			reset();
+			routeChoice = "investigation";
+			difficultyScore = level;
+			const fixture = createFixture({ usageReports: ON_PACE });
+			const result = await spawn(fixture);
+			expect(result.block).toBeUndefined();
+			expect(result.model[0]).toBe(first);
+			expect(result.thinkingLevel).toBe(effort);
+		});
+	}
+
+	for (const [difficulty, level, solEffort] of [
+		["exact", 0, "medium"],
+		["ordinary", 1, "medium"],
+		["hard", 2, "high"],
+		["critical", 3, "high"],
+	] as const) {
+		test(`investigation ${difficulty} skips gated Anthropic for Sol then Grok 4.7`, async () => {
+			reset();
+			routeChoice = "investigation";
+			difficultyScore = level;
+			const fixture = createFixture({
+				usageReports: [usage("anthropic", 0.99), usage("openai-codex"), usage("xai-oauth")],
+			});
+			const result = await spawn(fixture);
+			expect(result.block).toBeUndefined();
+			expect(result).toMatchObject({
+				model: ["openai-codex/gpt-6.1-sol", "xai-oauth/grok-4.7:high"],
+				thinkingLevel: solEffort,
+			});
+		});
+	}
+
+	for (const target of [
+		"openai-codex/gpt-6.2-astra",
+		"openai-codex/gpt-5.6-luna",
+		"anthropic/claude-fable-5-2",
+	]) {
+		test(`a Directive naming ${target} always routes to it`, async () => {
+			reset();
+			const fixture = createFixture();
+			const result = await spawn(fixture, { assignment: `Directive: use ${target}` });
+			expect(result.block).toBeUndefined();
+			expect(result).toMatchObject({ model: [target] });
+		});
+	}
+
+	test("a Directive naming a quota-skipped model still routes to it", async () => {
+		reset();
+		const fixture = createFixture({ usageReports: [usage("anthropic", 0.99), usage("openai-codex", 0.99), usage("xai-oauth", 0.99)] });
+		const result = await spawn(fixture, { assignment: "Directive: use anthropic/claude-sonnet-5-5 high" });
+		expect(result).toMatchObject({ model: ["anthropic/claude-sonnet-5-5"], thinkingLevel: "high" });
+	});
+
+	test("a Directive effort is not capped by the catalog maxEffort", async () => {
+		reset();
+		const fixture = createFixture();
+		const result = await spawn(fixture, { assignment: "Directive: use anthropic/claude-haiku-5-5 max" });
+		expect(result).toMatchObject({ model: ["anthropic/claude-haiku-5-5"], thinkingLevel: "max" });
+	});
+
+	test("a scout with a Directive model goes to that model even at high difficulty", async () => {
+		reset();
+		difficultyScore = 3;
+		const fixture = createFixture();
+		const result = await spawn(fixture, { agent: "scout", assignment: "Directive: use openai-codex/gpt-6.2-astra" });
+		expect(result.block).toBeUndefined();
+		expect(result).toMatchObject({ model: ["openai-codex/gpt-6.2-astra"] });
+	});
+
+	test("a Directive model bypasses planning readiness, the chat-only block, unknown agents, and routing off", async () => {
+		reset();
+		readinessChoice = "discuss-with-user";
+		const plan = await spawn(createFixture(), { agent: "plan", assignment: "Directive: use openai-codex/gpt-6.2-astra" });
+		expect(plan).toMatchObject({ model: ["openai-codex/gpt-6.2-astra"] });
+
+		const chatOnly = await spawn(createFixture(), { agent: "slow1", assignment: "Directive: use anthropic/claude-fable-5-2" });
+		expect(chatOnly).toMatchObject({ model: ["anthropic/claude-fable-5-2"] });
+
+		const ghost = await spawn(createFixture(), { agent: "ghost", assignment: "Directive: use openai-codex/gpt-5.6-luna low" });
+		expect(ghost).toMatchObject({ model: ["openai-codex/gpt-5.6-luna"], thinkingLevel: "low" });
+
+		const pinned = await spawn(createFixture(), { agent: "design-master", assignment: "Directive: use xai-oauth/grok-4.6 high" });
+		expect(pinned).toMatchObject({ model: ["xai-oauth/grok-4.6"], thinkingLevel: "high" });
+
+		const off = await spawn(createFixture({ enabled: false }), { assignment: "Directive: use openai-codex/gpt-5.6-luna high" });
+		expect(off).toMatchObject({ model: ["openai-codex/gpt-5.6-luna"], thinkingLevel: "high" });
+	});
+
+	test("empty ignoreQuota paces OpenAI so over-skipAt Codex is skipped", async () => {
+		reset();
+		routeChoice = "code";
+		slotChoice = "Feature work";
+		const fixture = createFixture({
+			usageReports: [usage("anthropic", 0.99), usage("openai-codex", 0.97), usage("xai-oauth")],
+		});
+		const result = await spawn(fixture);
+		expect(result.block).toBeUndefined();
+		expect(result.model[0]).toBe("xai-oauth/grok-4.6");
+		expect(result.thinkingLevel).toBe("high");
+	});
+});
+
+
 describe("split-test runtime", () => {
 	const splitUsage = [
 		usage("anthropic"),
@@ -1103,12 +1374,12 @@ describe("split-test runtime", () => {
 		const result = await spawn(fixture);
 		expect(result.model[0]).toBe("openai-codex/gpt-6.1-terra");
 		expect(decisionData(fixture).experiment).toMatchObject({
-			slot: "code/exact",
+			slot: "speed-moderate-difficulty/exact",
 			fellBack: false,
 			candidate: "openai-codex/gpt-6.1-terra",
 			unavailable: ["anthropic/claude-haiku-5-5"],
 		});
-		expect(result.note).toContain("split test code/exact");
+		expect(result.note).toContain("split test speed-moderate-difficulty/exact");
 	});
 
 	test("every candidate unavailable falls back to the pool and records fellBack", async () => {
@@ -1120,23 +1391,24 @@ describe("split-test runtime", () => {
 			usageReports: [usage("anthropic", 0.99), usage("openai-codex", 0.99), usage("openscale", 0.99), usage("xai-oauth", 0.99)],
 		});
 		const result = await spawn(fixture);
-		expect(result).toMatchObject({ model: ["openscale/deepseek/deepseek-v4.1-flash-1017"], thinkingLevel: "high" });
-		expect(decisionData(fixture).experiment).toMatchObject({ slot: "code/ordinary", fellBack: true });
+		expect(result).toMatchObject({
+			model: ["opencode-go/hy4-flash-free", "opencode-go/deepseek-v4.1-flash:low"],
+			thinkingLevel: "low",
+		});
+		expect(decisionData(fixture).experiment).toMatchObject({ slot: "speed-moderate-difficulty/ordinary", fellBack: true });
 		expect(decisionData(fixture).experiment).not.toHaveProperty("candidate");
-		expect(result.note).toContain("split test code/ordinary");
+		expect(result.note).toContain("split test speed-moderate-difficulty/ordinary");
 	});
 
 	test("disabled or expired experiment matches a catalog with no experiment block", async () => {
 		reset();
 		routeChoice = "code";
 		difficultyScore = 1;
-		const without = structuredClone(catalogData) as typeof catalogData & { experiment?: unknown };
-		delete without.experiment;
-		const expired = structuredClone(catalogData) as typeof catalogData & { experiment: { endsAt: string } };
-		expired.experiment.endsAt = "2020-01-01T00:00:00Z";
+		const without = structuredClone(catalogData) as typeof catalogData;
+		const expiredCatalog = splitTestCatalog("2020-01-01T00:00:00Z");
 		const noBlock = createFixture({ catalog: parseCatalog(without), usageReports: splitUsage });
 		const disabled = createFixture({ experiment: false, usageReports: splitUsage });
-		const past = createFixture({ catalog: parseCatalog(expired), usageReports: splitUsage });
+		const past = createFixture({ catalog: expiredCatalog, usageReports: splitUsage });
 		const expected = await spawn(noBlock);
 		expect(await spawn(disabled)).toMatchObject({ model: expected.model, thinkingLevel: expected.thinkingLevel });
 		expect(await spawn(past)).toMatchObject({ model: expected.model, thinkingLevel: expected.thinkingLevel });

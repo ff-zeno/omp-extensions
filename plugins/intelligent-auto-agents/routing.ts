@@ -67,10 +67,32 @@ export type PoolSpec = {
 export type TaskTypeSpec = {
 	pool?: string;
 	model?: string;
+	/**
+	 * Coding slot: a slot id fixes it; `ask` makes Jev answer the slot question in the same call. The
+	 * pool then comes from `slots.pools[mode][slot]`; a slot task type names no pool or model.
+	 */
+	slot?: string;
+	/** Reached only through `agents.taskTypes` or a directive; never offered to Jev as an option. */
+	fixedOnly?: boolean;
 	effort?: EffortRange;
 	/** Provider-failure fallbacks for a fixed `model` only; quota never moves these. */
 	backups?: string[];
 	description: string;
+};
+
+/** Which slot table coding work uses. */
+export const MODES = ["speed", "cost"] as const;
+export type Mode = (typeof MODES)[number];
+/** Value of `TaskTypeSpec.slot` that makes Jev answer the slot question. */
+export const ASK_SLOT = "ask";
+export type SlotCatalog = {
+	instructions: string;
+	/** Slot id to Jev criterion. */
+	criteria: Record<string, string>;
+	/** Slot ids lowest first; on an uncertain answer the higher of the two likeliest wins. */
+	order: string[];
+	/** Pool name per mode and slot. */
+	pools: Record<Mode, Record<string, string>>;
 };
 
 export type PlanMetadata = {
@@ -112,6 +134,13 @@ export type PoolLimits = {
 	 * Failure demotion still applies. Absent or empty means every provider is gated as usual.
 	 */
 	ignoreQuota?: readonly string[];
+	ignoreQuotaDescription?: string;
+	/**
+	 * Weekly share a provider keeps for chat inside the final window: workers skip it once its weekly
+	 * use reaches 1 minus the share, although the final window lifts pace and skipAt for others.
+	 */
+	finalWindowReserve?: Readonly<Record<string, number>>;
+	finalWindowReserveDescription?: string;
 };
 
 export type ExperimentCandidate = { model: string; effort: Effort };
@@ -154,6 +183,10 @@ export type Catalog = {
 	reviewOnly: { models: string[]; containing: string[]; pools: string[] };
 	poolLimits: PoolLimits;
 	pools: Record<string, PoolSpec>;
+	/** Coding slot table selection, set by hand. */
+	mode: Mode;
+	modeDescription: string;
+	slots: SlotCatalog;
 	taskTypes: Record<string, TaskTypeSpec>;
 	/**
 	 * `covered` agents route through task types; `pinned` agents keep their bound model. `taskTypes`
@@ -161,7 +194,7 @@ export type Catalog = {
 	 */
 	agents: { covered: string[]; pinned: string[]; taskTypes: Record<string, string> };
 	planMetadata: PlanMetadata;
-	/** Case-insensitive substrings no directive target may contain. */
+	/** Case-insensitive substrings no catalog directive alias definition may contain; never applied to a user's directive. */
 	blockedDirectiveTargets: string[];
 	/** Directive names Jev may resolve through OMP roles or literal provider/model ids. */
 	directiveTargets: Record<string, string>;
@@ -209,6 +242,11 @@ export type Decision = {
 	leading?: string;
 	/** Difficulty name when Jev rated it with enough confidence. */
 	difficulty?: Difficulty;
+	/** Coding slot when the slot question was asked; never missing then, even when Jev was unsure. */
+	slot?: string;
+	slotConfidence?: number;
+	/** Why the slot was taken: Jev's confident answer, the higher of the two likeliest, or no usable answer. */
+	slotReason?: "classified" | "uncertain-higher" | "no-answer-highest";
 	confidence?: number;
 	/** Persona Jev suggested with enough confidence, before the catalog's difficulty ceiling. */
 	persona?: Persona;
@@ -222,6 +260,7 @@ export type ChoiceRequest = {
 		route?: { type: "choice"; instructions: string; criteria: Record<string, string> };
 		difficulty?: { type: "score"; instructions: string; criteria: string[] };
 		persona?: { type: "choice"; instructions: string; criteria: Record<string, string> };
+		slot?: { type: "choice"; instructions: string; criteria: Record<string, string> };
 	};
 };
 export type Evaluate = (request: ChoiceRequest, signal: AbortSignal) => Promise<unknown>;
@@ -354,6 +393,8 @@ function taskTypeSpec(value: unknown): value is TaskTypeSpec {
 	if (value.effort !== undefined && !effortRange(value.effort)) return false;
 	if (value.backups !== undefined && (!Array.isArray(value.backups) || !value.backups.every(text) || !unique(value.backups)))
 		return false;
+	if (value.slot !== undefined && (!text(value.slot) || value.pool !== undefined || value.model !== undefined)) return false;
+	if (value.fixedOnly !== undefined && typeof value.fixedOnly !== "boolean") return false;
 	return true;
 }
 
@@ -377,6 +418,12 @@ function poolLimits(value: unknown): value is PoolLimits {
 	if (value.ignoreQuota !== undefined) {
 		if (!Array.isArray(value.ignoreQuota) || !value.ignoreQuota.every(text) || !unique(value.ignoreQuota)) return false;
 	}
+	if (value.ignoreQuotaDescription !== undefined && !text(value.ignoreQuotaDescription)) return false;
+	if (value.finalWindowReserve !== undefined) {
+		if (!record(value.finalWindowReserve)) return false;
+		if (!Object.entries(value.finalWindowReserve).every(([provider, share]) => text(provider) && unit(share))) return false;
+	}
+	if (value.finalWindowReserveDescription !== undefined && !text(value.finalWindowReserveDescription)) return false;
 	return (
 		unit(value.demoteAt) &&
 		unit(value.skipAt) &&
@@ -428,6 +475,55 @@ function assertModelSafeMap(
 		if (blockedDirectiveTargets.some(substring => lower.includes(substring.toLowerCase())))
 			throw new Error(`Auto-agents directive target cannot name ${target}`);
 	}
+}
+
+/** The coding slot question and the pool every mode uses for every slot. */
+function parseSlots(value: unknown, pools: Record<string, PoolSpec>): SlotCatalog {
+	if (
+		!record(value) ||
+		!text(value.instructions) ||
+		!record(value.criteria) ||
+		!Array.isArray(value.order) ||
+		value.order.length < 2 ||
+		!value.order.every(text) ||
+		!unique(value.order) ||
+		value.order.includes(ASK_SLOT) ||
+		Object.keys(value.criteria).length !== value.order.length ||
+		!value.order.every(slot => text((value.criteria as Record<string, unknown>)[slot])) ||
+		!record(value.pools)
+	)
+		throw new Error("Invalid auto-agents slots");
+	const order = value.order as string[];
+	const slotPools = {} as Record<Mode, Record<string, string>>;
+	for (const mode of MODES) {
+		const table = value.pools[mode];
+		if (!record(table) || Object.keys(table).length !== order.length) throw new Error(`Invalid auto-agents slot pools for mode "${mode}"`);
+		slotPools[mode] = {};
+		for (const slot of order) {
+			const poolName = table[slot];
+			if (!text(poolName) || !(poolName in pools))
+				throw new Error(`Auto-agents slot "${slot}" in mode "${mode}" names unknown pool "${String(poolName)}"`);
+			if (pools[poolName].excludePlanAuthors)
+				throw new Error(`Auto-agents slot "${slot}" in mode "${mode}" names excluded pool "${poolName}"`);
+			slotPools[mode][slot] = poolName;
+		}
+	}
+	return {
+		instructions: value.instructions,
+		criteria: Object.fromEntries(order.map(slot => [slot, (value.criteria as Record<string, string>)[slot]])),
+		order,
+		pools: slotPools,
+	};
+}
+
+/** Pool a slot task type uses in the catalog's mode. */
+export function slotPoolName(catalog: Catalog, slot: string): string {
+	return catalog.slots.pools[catalog.mode][slot];
+}
+
+/** The highest slot, taken when the slot question gave no usable answer. */
+export function highestSlot(catalog: Catalog): string {
+	return catalog.slots.order[catalog.slots.order.length - 1];
 }
 
 const EXPERIMENT_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
@@ -573,6 +669,11 @@ export function parseCatalog(value: unknown): Catalog {
 		if (!(name in pools)) throw new Error(`Auto-agents reviewOnly names unknown pool "${name}"`);
 	}
 
+	const slots = parseSlots(value.slots, pools);
+	if (!MODES.some(mode => mode === value.mode) || !text(value.modeDescription))
+		throw new Error("Invalid auto-agents mode");
+	const mode = value.mode as Mode;
+
 	const taskTypes: Record<string, TaskTypeSpec> = {};
 	for (const [name, entry] of Object.entries(value.taskTypes)) {
 		if (!text(name) || !taskTypeSpec(entry)) throw new Error(`Invalid auto-agents task type "${name}"`);
@@ -580,6 +681,8 @@ export function parseCatalog(value: unknown): Catalog {
 			throw new Error(`Auto-agents task type "${name}" names unknown pool "${entry.pool}"`);
 		if (entry.pool !== undefined && entry.model !== undefined)
 			throw new Error(`Auto-agents task type "${name}" cannot name both a pool and a model`);
+		if (entry.slot !== undefined && entry.slot !== ASK_SLOT && !slots.order.includes(entry.slot))
+			throw new Error(`Auto-agents task type "${name}" names unknown slot "${entry.slot}"`);
 		taskTypes[name] = entry;
 	}
 
@@ -644,6 +747,9 @@ export function parseCatalog(value: unknown): Catalog {
 		reviewOnly,
 		poolLimits: value.poolLimits,
 		pools,
+		mode,
+		modeDescription: value.modeDescription,
+		slots,
 		taskTypes,
 		agents: { covered: value.agents.covered, pinned: value.agents.pinned, taskTypes: agentTaskTypes },
 		planMetadata: {
@@ -863,6 +969,8 @@ export function createCatalogReloader(
 export function taskTypeEffortVaries(catalog: Catalog, name: string): boolean {
 	const taskType = catalog.taskTypes[name];
 	if (!taskType) return false;
+	// A slot fixes model and effort per provider; difficulty never moves it.
+	if (taskType.slot !== undefined) return false;
 	if (taskType.model !== undefined) return true;
 	if (taskType.pool === undefined) return true;
 	const pool = catalog.pools[taskType.pool];
@@ -1230,7 +1338,11 @@ export function rankPool(
 				const adjustedUsed = sample.usedFraction + (penalized ? basePenalty : 0);
 				// Weekly quota left in the final stretch is lost at reset, so only a spent window stops new work there.
 				const spent = sample.exhausted || sample.usedFraction >= 1;
-				if (spent || (adjustedUsed >= limits.skipAt && !finalWeekly)) shouldSkip = true;
+				// Final window: pace and skipAt are lifted, except that a provider with a reserve keeps that
+				// share of its weekly quota for chat.
+				const reserve = finalWeekly ? limits.finalWindowReserve?.[member.model.provider] : undefined;
+				const reserved = reserve !== undefined && adjustedUsed >= 1 - reserve;
+				if (spent || reserved || (adjustedUsed >= limits.skipAt && !finalWeekly)) shouldSkip = true;
 				if (!paced) continue;
 				used[sample.kind] = Math.max(used[sample.kind] ?? Number.NEGATIVE_INFINITY, adjustedUsed);
 				const elapsed = Math.min(
@@ -1391,9 +1503,32 @@ async function ask(
 }
 
 /**
+ * Pick the coding slot from Jev's answer. A confident answer wins; an uncertain one takes the higher
+ * of the two likeliest slots; no usable answer takes the highest slot. The slot never blocks a spawn.
+ */
+export function pickSlot(
+	answer: unknown,
+	catalog: Catalog,
+): { slot: string; confidence?: number; reason: NonNullable<Decision["slotReason"]> } {
+	const order = catalog.slots.order;
+	const parsed = choiceAnswer(answer, order);
+	if (!parsed || !record(answer) || !record(answer.probabilities))
+		return { slot: highestSlot(catalog), reason: "no-answer-highest" };
+	if (parsed.confidence >= catalog.minConfidence)
+		return { slot: parsed.choice, confidence: parsed.confidence, reason: "classified" };
+	const probabilities = answer.probabilities as Record<string, number>;
+	const [first, second] = [...order].sort(
+		(left, right) => probabilities[right] - probabilities[left] || order.indexOf(right) - order.indexOf(left),
+	);
+	const higher = order.indexOf(first) > order.indexOf(second) ? first : second;
+	return { slot: higher, confidence: parsed.confidence, reason: "uncertain-higher" };
+}
+
+/**
  * Ask Jev to classify one routed spawn in a single call: choose a task type when several compete,
- * rate difficulty, and suggest a persona when asked. An invalid or uncertain persona answer only
- * drops the suggestion. Caller cancellation rethrows; every other failure returns a baseline decision.
+ * rate difficulty, answer the coding slot when asked, and suggest a persona when asked. An invalid or
+ * uncertain persona answer only drops the suggestion; the slot always resolves (see pickSlot).
+ * Caller cancellation rethrows; every other failure returns a baseline decision.
  */
 export async function choose(
 	state: string,
@@ -1403,10 +1538,13 @@ export async function choose(
 	catalog: Catalog,
 	evaluate: Evaluate,
 	signal?: AbortSignal,
+	options?: { askSlot?: boolean },
 ): Promise<Decision> {
 	signal?.throwIfAborted();
 	const routeSlots = slots.length > 1;
-	if (!routeSlots && !rateDifficulty && !suggestPersona) return { source: "baseline", reason: "nothing-to-classify" };
+	const askSlot = options?.askSlot === true;
+	if (!routeSlots && !rateDifficulty && !suggestPersona && !askSlot)
+		return { source: "baseline", reason: "nothing-to-classify" };
 	const questions: ChoiceRequest["questions"] = {};
 	if (routeSlots) {
 		questions.route = {
@@ -1429,14 +1567,29 @@ export async function choose(
 			criteria: Object.fromEntries(PERSONAS.map(name => [name, catalog.personas.criteria[name]])),
 		};
 	}
+	if (askSlot) {
+		questions.slot = {
+			type: "choice",
+			instructions: catalog.slots.instructions,
+			criteria: Object.fromEntries(catalog.slots.order.map(slot => [slot, catalog.slots.criteria[slot]])),
+		};
+	}
 	const request: ChoiceRequest = { state, questions };
 	try {
 		const { answers, usage } = await ask(request, catalog, evaluate, signal);
 		const persona = suggestPersona ? choiceAnswer(answers.persona, PERSONAS) : undefined;
-		// Usage and a confident persona ride along on every decision, baseline included.
+		const slot = askSlot ? pickSlot(answers.slot, catalog) : undefined;
+		// Usage, the slot and a confident persona ride along on every decision, baseline included.
 		const extras = {
 			...(persona && persona.confidence >= catalog.minConfidence
 				? { persona: persona.choice as Persona, personaConfidence: persona.confidence }
+				: {}),
+			...(slot
+				? {
+						slot: slot.slot,
+						slotReason: slot.reason,
+						...(slot.confidence !== undefined ? { slotConfidence: slot.confidence } : {}),
+					}
 				: {}),
 			...(usage ? { usage } : {}),
 		};
