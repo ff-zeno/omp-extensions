@@ -47,8 +47,8 @@ CLONE="$PWD/.tmp/oh-my-pi-v$NEW"
 4. Install the clone's dependencies before running anything:
    `bun --cwd="$CLONE" install --frozen-lockfile`
 5. Supply the matching prebuilt native addon; the tests import it and a build stamped for another release fails to load.
-   Copy the addons the installed OMP already cached, or build them (needs Rust):
-   `cp -f "$HOME/.omp/natives/$NEW"/pi_natives.*.node "$CLONE/packages/natives/native/"`
+   Copy the addons the installed OMP already cached (OMP 19 keeps them in an `embedded-<hash>/` subdirectory), or build them (needs Rust):
+   `cp -f "$HOME/.omp/natives/$NEW"/{,*/}pi_natives.*.node "$CLONE/packages/natives/native/"`
    `bun --cwd="$CLONE" run build:native`  # only if the cache copy above is missing
 6. Run the test files the patch touches, from the coding-agent package (the installer derives this list from the patch's `+++ b/` lines):
    `bun --cwd="$CLONE/packages/coding-agent" test test/extensions-runner.test.ts test/task/structured-subagent.test.ts test/task/wire-schema.test.ts test/task/workpool.test.ts`

@@ -41,19 +41,20 @@ Most FS/bash tools resolve these; path selectors: `read` docs.
 - `memory://root`: project-memory summary
 - `agent://<id>`: output artifact; `/<child>`: nested-subagent output; otherwise `/<path>`: JSON field
 - `history://<id>`: read-only agent transcript (live|parked|released); bare `history://`: all agents.
-- `artifact://<id>`: content
+- `local://<N>.log`: spill (truncated tool output, shaped original); page `:N-M` or `:raw:N-M`.
+- `help://<tool>/<topic>`: reference docs for a tool; `help://<tool>` lists its topics.
 - `local://<name>.md`: plan artifacts/shared content for subagents
 - `mcp://<uri>`: MCP resource
 - `issue://<N>` / `issue://<owner>/<repo>/<N>`: GitHub issue
 - `pr://<N>` / `pr://<owner>/<repo>/<N>`: GitHub pull request
 - `omp://`: harness docs; AVOID unless user asks about harness.
 
-# xd:// Tool Devices
-Some tools are mounted as virtual devices, executed by writing a JSON args object as `content` to `xd://<tool>` via `write`.
-Invalid args return the schema in the error — fix and retry.
-- Packed/discoverable tools (`lsp`, `ast_grep`, `ast_edit`, `browser`, `debug`, and others) MAY be absent from the function-tool list when `tools.xdev` is on; they still exist as `xd://<name>`.
-- If a specialized tool is required and missing from the function-tool list: `read xd://<name>` for its schema, then `write` JSON args to that path. Do not assume it is disabled.
-- Do not enumerate every device at session start. Probe when the work needs that capability.
+# Tool Commands
+Some tools are also commands in `bash`: run `<tool> <positional> [--flag value]`; `<tool> --help` prints usage derived from its schema.
+Raw JSON arguments object: `-j '<json>'`, `@file`, or `-` (stdin); bad arguments exit 2 with a usage hint — fix and retry.
+- Packed/discoverable tools (`lsp`, `ast_grep`, `ast_edit`, `browser`, `debug`, and others) MAY be absent from the function-tool list when `tools.commands` is on; they still exist as `bash` commands.
+- If a specialized tool is required and missing from the function-tool list: run `<name> --help` in `bash` for its usage, then run it with its arguments. Do not assume it is disabled.
+- Do not enumerate every command at session start. Probe when the work needs that capability.
 
 § Tool Policy
 
@@ -68,7 +69,7 @@ SHOULD resolve prerequisites, parallelize independent calls. Retry empty/partial
 You MUST use the specialized tool over its shell equivalent:
 - File or directory reads → `read` (a directory path lists entries).
 - Surgical edits → `edit`.
-- When a language server is available, MUST use `lsp` (or `xd://lsp` when packed) for definitions, type definitions, implementations, references, hover; code actions for refactors/imports/fixes.
+- When a language server is available, MUST use `lsp` (or the `lsp` command in `bash` when packed) for definitions, type definitions, implementations, references, hover; code actions for refactors/imports/fixes.
 - Unknown behavior/location: descriptive `find` FIRST; NEVER guess `grep`/`glob` targets.
 - Regex/literal/known-symbol search → `grep`, NEVER shell `grep`/`rg`/`awk`.
 - File structure/names: `glob`, NEVER `ls **/*.ext`/`fd`.
@@ -85,8 +86,8 @@ NEVER open guessed files. Use `find` hits only; load only necessary files/sectio
 
 # AST
 You MUST use syntax-aware tools before text hacks:
-- `ast_grep` for structural discovery (or `xd://ast_grep` when packed).
-- `ast_edit` for codemods (or `xd://ast_edit` when packed).
+- `ast_grep` for structural discovery (or the `ast_grep` command in `bash` when packed).
+- `ast_edit` for codemods (or the `ast_edit` command in `bash` when packed).
 - Use `grep` only for plain-text lookup when structure is irrelevant.
 
 § Delivery

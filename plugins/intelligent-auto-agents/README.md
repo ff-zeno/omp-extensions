@@ -29,8 +29,8 @@ The plugin (bundled agents, the skill, `/auto-agents`, and the routing hook) loa
 The patched OMP build lets the hook set each subagent's model and thinking level; without it the plugin loads and Jev routing stays disabled.
 
 Requirements:
-- OMP 18.22.2. The bundled patch targets that release; another release needs a rebased patch (see [core/PATCHING.md](core/PATCHING.md)).
-- `git` and Bun 1.4.4 or newer to build the patched OMP (OMP 18.22.2 declares `bun@>=1.4.4`). Running the plugin needs only OMP.
+- OMP 19.1.1. The bundled patch targets that release; another release needs a rebased patch (see [core/PATCHING.md](core/PATCHING.md)).
+- `git` and Bun 1.4.4 or newer to build the patched OMP (OMP 19.1.1 declares `bun@>=1.4.4`). Running the plugin needs only OMP.
 - `sha256sum` (Linux) or `shasum` (macOS) for the installer.
 - Rust `cargo` from rustup only when no matching prebuilt native addon is in `~/.omp/natives/<version>`; running the stock `omp` once fills that directory.
 - A TypeSafe API key for Jev (see [TypeSafe authentication](#typesafe-authentication)). Without one, every spawn keeps its configured model and effort.
@@ -39,9 +39,9 @@ Requirements:
 
 Run these steps in order and check each result before the next; an AI agent setting this up can follow them as written.
 
-1. Install stock OMP 18.22.2 and confirm `omp --version` prints `omp/18.22.2`:
+1. Install stock OMP 19.1.1 and confirm `omp --version` prints `omp/19.1.1`:
    ```
-   curl -fsSL https://omp.sh/install | sh -s -- --binary --ref v18.22.2
+   curl -fsSL https://omp.sh/install | sh -s -- --binary --ref v19.1.1
    ```
 2. Clone this repository and build the patched OMP. The installer replaces the `omp` on `PATH` only after the patched tests pass, and prints the backup path and rollback command:
    ```
@@ -115,7 +115,7 @@ To remove the patched OMP build, follow the rollback steps under [Patched OMP re
 
 ## Patched OMP requirement
 
-The extension requires OMP subagent routing API v2 from the pinned OMP 18.22.2 source commit `e1ae2cc998efd1ca151b46ebefc0e0dab6c23c63`.
+The extension requires OMP subagent routing API v2 from the pinned OMP 19.1.1 source commit `31ffee513f27a01bba7d4dfbe12bae239cdc646a`.
 The bundled patch in `core/` targets that release; [core/PATCHING.md](core/PATCHING.md) explains what it changes and how to rebase it onto a future release.
 
 On stock OMP, the extension logs a warning and `/auto-agents` reports that routing is unavailable.
@@ -208,13 +208,13 @@ This package bundles `orchestrator`, `design-master`, `design-second`, `review-f
 
 OMP also supplies its built-in `task`, `scout`, `sonic`, `reviewer`, and `security-reviewer` agents used by the catalog. The pinned `review-closer` and `review-verifier` agents are profile agents, not bundled here.
 
-OMP 18.22.2 discovers the nearest project `.omp/agents` directory first, then the user agent directory `~/.omp/agent/agents`, then enabled extension package agent directories, and finally bundled agents.
+OMP 19.1.1 discovers the nearest project `.omp/agents` directory first, then the user agent directory `~/.omp/agent/agents`, then enabled extension package agent directories, and finally bundled agents.
 
 Therefore a project or user agent with the same exact, case-sensitive name wins over this package's bundled copy.
 
 Earlier extension roots also win over later extension roots, and invalid files are skipped with a warning.
 
-See [OMP 18.22.2 task-agent discovery](https://github.com/can1357/oh-my-pi/blob/e1ae2cc998efd1ca151b46ebefc0e0dab6c23c63/docs/task-agent-discovery.md#merge-and-collision-rules) for the precedence and collision rules.
+See [OMP 19.1.1 task-agent discovery](https://github.com/can1357/oh-my-pi/blob/31ffee513f27a01bba7d4dfbe12bae239cdc646a/docs/task-agent-discovery.md#merge-and-collision-rules) for the precedence and collision rules.
 
 ## `/auto-agents`
 

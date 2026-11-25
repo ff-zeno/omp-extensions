@@ -168,7 +168,8 @@ if ! native_ready; then
   esac
   if [[ -n "$native_platform" && -d "$cached_native_dir" ]]; then
     shopt -s nullglob
-    cached_addons=("$cached_native_dir"/pi_natives."$native_platform"-*.node)
+    # OMP 19 keeps the prebuilt under an embedded-<hash>/ subdirectory.
+    cached_addons=("$cached_native_dir"/pi_natives."$native_platform"-*.node "$cached_native_dir"/*/pi_natives."$native_platform"-*.node)
     shopt -u nullglob
     if ((${#cached_addons[@]})); then
       cp -f -- "${cached_addons[@]}" "$SOURCE/packages/natives/native/"
