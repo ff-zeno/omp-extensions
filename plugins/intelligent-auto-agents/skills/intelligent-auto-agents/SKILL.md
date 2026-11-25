@@ -49,11 +49,13 @@ Highest wins:
 4. A pool ranks its members by difficulty scope and quota for the task type.
 5. A fixed task-type model, then the agent's bound `modelRoles` selector.
 
+Workers pin OAuth logins from the machine-local account-pin file by login email, not from the catalog. The main chat is unchanged.
+
 ## Dispatch
 
 1. If the user names a model, role, or reasoning level, pass the matching agent with `routing: "off"`.
 2. If no model or role is named, pass only the requested `agent` and an optional persona header.
-3. Never pass a model or effort that the user did not request.
+3. Never pass a model or effort that the user did not request. One exception: after a substantive failure (a failed check or a rejected result), the second attempt may carry `Directive: use <the first attempt's model> <one reasoning level higher>`. A payment error, an unavailable dependency, an unclear permission or a broken check is not a substantive failure: fix or report it instead of raising. At the cap, keep a pinned model and the role floor and report the failure to the operator. Split only independent items with disjoint outputs; keep coupled steps with one worker and one integration owner.
 4. Fill each stage with concrete assignments, owned paths, shared contracts, acceptance criteria, and a `solutionSpace` describing the assigned slice rather than the surrounding problem.
 5. Delegate useful substantive evidence/execution before doing the bulk in the parent; dispatch independent assignments together. Keep conversation, trivial actions, decisions and integration inline. A bounded worker executes its assignment directly, without recursive delegation ceremony.
 6. To steer Jev without disabling routing, add a `Directive: use <alias|model> [effort]` line to the brief.
@@ -188,7 +190,7 @@ Jev evaluates routing requests through TypeSafe.
 Authenticate with `/login typesafe` or set `TYPESAFE_API_KEY`.
 Without a TypeSafe key, ordinary automatic jobs return a routing-unavailable block/reason to the parent instead of silently keeping the configured model.
 Jev failure or uncertain required type/difficulty also blocks ordinary automatic jobs. Task-type directives still require confident necessary difficulty. Deliberate named-model/pinned review requests retain their explicit choices; routing disabled, explicit model/effort locks and unresolvable pools preserve their existing baseline behavior.
-Quota is not a global dispatch cap: `plan-review` members are ungated, missing usage can still select Anthropic, and a failed usage fetch preserves pool order. Fixed `vision` keeps its provider-failure `@lead` backup without quota checks; named models and pinned agents intentionally bypass pool gates. All-skipped worker fallbacks do not recheck quota. The shipped catalog no longer exempts Codex from normal quota ranking. Catalog.json is re-read on each spawn when its mtime changes.
+Quota is not a global dispatch cap: `plan-review` members are ungated, missing usage can still select Anthropic, and a failed usage fetch preserves pool order. `poolLimits.ignoreQuota` lists providers whose members skip all usage-based ranking while failure demotion still applies; the shipped catalog lists `openai-codex`. Fixed `vision` keeps its provider-failure `@lead` backup without quota checks; named models and pinned agents intentionally bypass pool gates. All-skipped worker fallbacks do not recheck quota. Optional catalog `provider` keeps only that OMP provider for automatic pool and fixed-model routing; set it in `catalog.json` and the next spawn picks it up. `catalog.json` is re-read on each spawn when its mtime changes; TypeScript changes still need a new OMP process.
 
 ## Visibility
 

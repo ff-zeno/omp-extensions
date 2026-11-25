@@ -247,6 +247,9 @@ Each `before_subagent_spawn` and `/auto-agents` re-reads `catalog.json` when its
 Invalid JSON or a catalog that fails validation keeps the last valid catalog.
 TypeScript or plugin-code changes still need a new OMP process.
 
+Workers pin OAuth logins from the machine-local file `~/.omp/agent/account-pin.yml`. That file is not part of this plugin and must not hold emails in the repo. Each key is an OMP provider; each value is the login email. `account:` applies to every provider that has that login. The main chat is unchanged. The next worker spawn reads the file.
+
+
 Keep the catalog version and schema valid; the plugin refuses to load a catalog that fails validation.
 
 `jevInstructions` holds the instructions Jev receives for the task-type question (`route`) and the difficulty rating (`difficulty`). The instructions distinguish bounded scout evidence collection, settled document drafting, requirements-grounded case writing, and open architecture or root-cause judgment. `difficulty` describes each level, and `nuances` lists judgment notes passed to Jev verbatim.
@@ -261,7 +264,7 @@ Pool members may set `effortFrom` to use another role/model's mapped, task-range
 
 `lead` (open design decisions and root-cause work), `plan` (writing implementation plans), and `security-review` share the quota-aware `lead` pool: `@frontier-1` → `@frontier-2` → `@frontier-3`. Anthropic uses `minWeeklyHeadroom: 0.1`; the other members use `minWeeklyHeadroom: 0`. The primary's difficulty-map effort is clamped to high–xhigh for lead/security review and medium–xhigh for planning. Both frontier rollover members set `effortFrom: "@frontier-1"`: frontier-2 matches the primary's effort, while frontier-3 sets `effortStep: 1` and runs one step higher, capped by the task type's xhigh ceiling. No member pins effort. Remaining eligible members stay in the provider-failure retry chain; the all-skipped fallback is `openscale/deepseek/deepseek-v4.1-flash-1017:high`.
 
-Quota checks are not a hard global dispatch cap. `plan-review` members are ungated; missing usage is ranked last (a failed usage fetch preserves pool order); uncertain or failed automatic classification blocks for parent clarification, while routing off and deliberate named/pinned review requests retain their explicit behavior. Fixed `vision` retains its provider-failure `@lead` backup without quota checks. When every member is skipped, the `lead`, `code`, and `review` pools use DeepSeek high and the `mechanical` and `commit` pools use DeepSeek low, without rechecking the fallback's quota. Directive models and deliberate review pins retain their explicit behavior; chat-only `medium`/`slow1`/`slow2`/`slow3` selectors decline before classification. `poolLimits.ignoreQuota` has no shipped provider entries, so Codex members are quota-ranked like other providers; failure demotion still applies.
+Quota checks are not a hard global dispatch cap. `plan-review` members are ungated; missing usage is ranked last (a failed usage fetch preserves pool order); uncertain or failed automatic classification blocks for parent clarification, while routing off and deliberate named/pinned review requests retain their explicit behavior. Fixed `vision` retains its provider-failure `@lead` backup without quota checks. When every member is skipped, the `lead`, `code`, and `review` pools use DeepSeek high and the `mechanical` and `commit` pools use DeepSeek low, without rechecking the fallback's quota. Directive models and deliberate review pins retain their explicit behavior; chat-only `medium`/`slow1`/`slow2`/`slow3` selectors decline before classification. `poolLimits.ignoreQuota` lists providers whose members skip all usage-based ranking, while failure demotion still applies; the shipped catalog lists `openai-codex`.
 
 `models` holds each model's `supports` list and its difficulty-to-effort map for `exact`, `ordinary`, `hard`, and `critical`; `*` is the fallback map. The task-type effort range clamps the map, then the model's `supports` list trims it. An optional `maxEffort` caps the model even when a pool member pins a higher effort; the shipped catalog caps `anthropic/claude-sonnet-5-5` at `low`.
 
@@ -280,6 +283,57 @@ Within `weeklyCrowdLiftMs` of a weekly reset, weekly crowding at `demoteAt` is l
 Within `freshWindowMs` (6 hours) after a reset, a window whose real usage is below `freshWindowMaxUsed` (3%) counts as exactly on pace (headroom 0), because elapsed time is still near zero. A member that needs extra headroom, such as Anthropic's 0.1 reserve, stays gated; all other gates still apply.
 Within `finalWindowMs` of a weekly reset, the weekly pace check and the weekly `skipAt` are lifted (only exhaustion still stops new work), burst penalties also count against the weekly window, and the short-window cap rises to `demoteAt`.
 Usage comes from the same provider reports as `/usage`. xAI is read through its aggregate credit pool, and Anthropic through its shared weekly windows (Anthropic no longer reports a 5-hour window). A member that sets `maxShortUsed` requires a 5-hour window, so a provider without one ranks that member as `no-usage`; no shipped member sets it.
+
+## Subagent rules, guidance lines and leaf tool sets
+
+`guidance.json` beside `catalog.json` holds what the plugin adds to a task subagent in its `before_agent_start` handler (`guidance.ts`).
+Main sessions and `/tan` clones are never touched; the plugin decides that a session is a child from `ctx.agent` only.
+
+- **Subagent block** (`block`): the `<subagent-rules>` text, inserted after `<project-context>`. Children receive no `AGENTS.md`, so the block carries the operator rules they lack. Its rows tagged `G1` (the scope rule) and `R1` (the repository-read sentence) can be switched off on their own.
+- **Guidance lines** (`lines`): each has an ID, a scope (`all`, `family`, `models` or `roles`), text, evidence and an `enabled` flag. A `family` or `models` scope may also list `roles`; then the model and the role must both match. Selected lines go in one `<worker-guidance>` block at the end of the prompt, ordered shared, family, model, role. `editFormat: "hash-anchored"` limits a line to children whose `edit` tool is the hashline one.
+- **Leaf tool set** (`toolSets.G8`): implementer, scout, reviewer, verifier, git and design roles lose `task` and `wait`. A set only removes tools from the child's active set, so it never adds one. Planners and orchestrators (agent `orchestrator`, or a `# Mode: orchestrate` child) keep them. The eval `agent()` and `workpool` helpers are not closed by this set; see the limits below.
+
+Every switch ships on except `G13` and `G17`: `block`, `G1`, `R1`, `G8` and every other line. The operator switched them on 2026-11-25.
+`G13` and `G17` ship off since 2026-11-25 because they repeat the SYSTEM.md Tool Policy; the Bash Interceptor also enforces `G17`.
+To switch entries off for one run, set `IAA_GUIDANCE_OVERRIDES` with `false` values (see below). The release and rollback rules in the later notes §6 ("Production defaults in the extension") still say when a switch should go back off.
+
+Family and model lines key on the model the request goes to. OMP does not rerun `before_agent_start` after a retry fallback, so these lines attach only when every model in the child's known chain is in their scope. The known chain is the list the parent's `before_subagent_spawn` saw: core's `patterns`, replaced by Jev's list when Jev routes. When that hook did not fire (`routing: "off"`), the chain is unknown and the child gets shared and role lines only, as does a chain that crosses families.
+
+The role is resolved once per child session and reused for the tool set, role lines and the record. A child's persona mode comes from session-persona's `resolveChildMode`, which settles the mode on first read and caches it, so `mode: "orchestrate"` without a header resolves the same whichever plugin's handler runs first. Without session-persona, a `# Mode:` header in the assignment is read instead. Running the handler again rebuilds the same prompt and tool set.
+
+Each child appends one `intelligent-auto-agents-decision` entry with `source: "guidance"`: the role, the model the lines were keyed on, the chain, the block switches, the line IDs, the tool set with the tools it removed, and `openSpawnRoutes`: the routes in `guidance.json` `spawnRoutes` whose tools the child still has. OMP's spawn policy and depth limit can still refuse a route listed there.
+
+### Switching entries per run
+
+Set `IAA_GUIDANCE_OVERRIDES` to a JSON object of ID to boolean before OMP starts, for example `{"R1":false,"G8":false}`. A `false` value switches that entry off for the run.
+IDs: `block`, `G1`, `R1`, `G8`, and every line ID in `guidance.json`. A missing ID keeps its default; an unknown ID logs a warning; malformed JSON or a non-boolean value fails at load.
+The variable only changes which entries attach. A switched-on line still attaches only within its scope.
+
+### Known limits
+
+- Known open route: a leaf with `eval` can still spawn through `agent()` and `workpool` (`spawnRoutes` entries with `knownOpen`). Those helpers check the session spawn policy, which OMP fixes from the agent's `spawns` front matter when it creates the child; an extension cannot change it, and `routing: "off"` skips `before_subagent_spawn`.
+- A chain from `retry.fallbackChains` for the primary selector, role or `default` is appended by core into the child's settings (`task/executor.ts:345-383`). The extension API exposes no settings, so that part is not in the known chain. A child pinned to one model whose config has such an entry can still receive family lines.
+
+## Review notes on returned results
+
+`review-notes.json` holds per-model checks that `review-notes.ts` adds to a returned subagent result.
+When a result arrives, a `context` handler puts a `<review-note>` just before the block's `</task-result>`.
+The note names the model and its effort, flags a retry fallback, and lists 1 to 5 checks to run before accepting the work.
+Example: ``Returned by GPT-6.1 Terra (medium). Before you accept: It adds test files outside the brief: run `git status` and compare the file list with the brief. …``
+
+- Each entry is keyed by a model family and matches with the same patterns and matcher as `guidance.json`. Families missing from `guidance.json` are defined in the file's own `families`.
+- Each check cites `MT-xxx` findings from the model-traits digest. A model with no logged findings has no entry and gets no note.
+- A check warns about a habit logged for that model and gives one small action. The coordinator does that action from the returned report or with one cheap command: `git status`, `git diff --stat`, running the tests, or one grep. A check never asks the coordinator to read a transcript, an error trail or a whole diff.
+- Advice that holds for every model does not belong in a note, so an entry can have a single check.
+- The handler reads only `task` and `wait` tool results and `async-result` notices. It skips a block without a `model` attribute, and it never adds a second note to a block.
+- It runs in every session. A child sees `<task-result>` blocks only for agents it started, so a coordinating child gets notes for its own workers.
+
+Every entry ships on. The operator switched all of them on 2026-11-25.
+To switch entries off for one run, set `IAA_REVIEW_NOTE_OVERRIDES` to a JSON object of ID to boolean before OMP starts, for example `{"RN-terra":false,"RN-luna-6":false}`.
+A missing ID keeps its default; an unknown ID logs a warning; malformed JSON fails at load.
+
+The note needs the patched OMP (see [Patched OMP requirement](#patched-omp-requirement)).
+Stock OMP writes no `model` attribute on `<task-result>`, so no block matches and nothing is added.
 
 ## Persona suggestions
 

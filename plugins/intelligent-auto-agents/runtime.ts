@@ -8,7 +8,12 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import catalogData from "./catalog.json";
+import guidanceData from "./guidance.json";
+import { parseGuidance, registerSubagentGuidance, rememberSpawnChain } from "./guidance";
+import reviewNotesData from "./review-notes.json";
+import { parseReviewNotes, registerReviewNotes } from "./review-notes";
 import {
+	type AccountLabelTable,
 	activeExperimentSlot,
 	capEffort,
 	type Catalog,
@@ -26,10 +31,14 @@ import {
 	isLiteralModel,
 	type ModelRef,
 	ORDINARY,
+	parseAccountLabels,
 	parseCatalog,
 	parseDirective,
+	parseWorkerAccountPins,
 	type Persona,
+	planWorkerAccountPins,
 	type PlanProvenance,
+	type WorkerAccountPins,
 	planProvenance,
 	type PoolMember,
 	type PoolUsage,
@@ -148,6 +157,7 @@ export function resetSpeedPoolStateForTests(): void {
 	catalogOverride = undefined;
 	experimentAgentDirOverride = undefined;
 	inProcessExperimentCounters.clear();
+	accountPinIoOverride = undefined;
 }
 
 export function setCatalogForTests(next: Catalog | undefined): void {
@@ -156,6 +166,101 @@ export function setCatalogForTests(next: Catalog | undefined): void {
 
 export function setExperimentAgentDirForTests(dir: string | undefined): void {
 	experimentAgentDirOverride = dir;
+}
+
+const PIN_FILES = ["account-pin.yml", "account-pin.yaml", "account-pin.json"] as const;
+const LABEL_FILES = ["account-labels.yml", "account-labels.yaml", "account-labels.json"] as const;
+
+type AccountPinIo = {
+	pinText?: () => string | undefined;
+	labelsText?: () => string | undefined;
+};
+let accountPinIoOverride: AccountPinIo | undefined;
+
+export function setAccountPinIoForTests(io?: AccountPinIo): void {
+	accountPinIoOverride = io;
+}
+
+function readOptionalText(filePath: string): string | undefined {
+	try {
+		return readFileSync(filePath, "utf8");
+	} catch {
+		return undefined;
+	}
+}
+
+function firstExistingText(override: string | undefined, dir: string, names: readonly string[]): string | undefined {
+	if (override?.trim()) return readOptionalText(override.trim());
+	for (const name of names) {
+		const text = readOptionalText(path.join(dir, name));
+		if (text !== undefined) return text;
+	}
+	return undefined;
+}
+
+function loadWorkerAccountPinState(): {
+	pins: WorkerAccountPins | undefined;
+	labels: AccountLabelTable;
+} {
+	const pinText = accountPinIoOverride?.pinText
+		? accountPinIoOverride.pinText()
+		: firstExistingText(process.env.OMP_ACCOUNT_PIN, path.join(os.homedir(), ".omp", "agent"), PIN_FILES);
+	const labelsText = accountPinIoOverride?.labelsText
+		? accountPinIoOverride.labelsText()
+		: firstExistingText(process.env.OMP_ACCOUNT_LABELS, path.join(os.homedir(), ".omp", "agent"), LABEL_FILES);
+	let pins: WorkerAccountPins | undefined;
+	if (pinText) {
+		try {
+			pins = parseWorkerAccountPins(pinText);
+		} catch {
+			pins = undefined;
+		}
+	}
+	let labels = parseAccountLabels("");
+	if (labelsText) {
+		try {
+			labels = parseAccountLabels(labelsText);
+		} catch {
+			labels = parseAccountLabels("");
+		}
+	}
+	return { pins, labels };
+}
+
+type WorkerAuthStorage = {
+	listOAuthAccounts?: (provider: string, sessionId?: string) => readonly {
+		provider: string;
+		credentialId: number;
+		email?: string;
+		accountId?: string;
+		orgId?: string;
+		orgName?: string;
+	}[];
+	pinSessionOAuthAccount?: (provider: string, sessionId: string, credentialId: number) => boolean;
+};
+
+function pinWorkerOAuthAccounts(ctx: ExtensionContext): void {
+	try {
+		if (ctx.agent?.kind === "main") return;
+		const { pins, labels } = loadWorkerAccountPinState();
+		if (!pins) return;
+		const sessionId = ctx.sessionManager?.getSessionId?.();
+		if (typeof sessionId !== "string" || !sessionId) return;
+		const auth = (ctx.modelRegistry as { authStorage?: WorkerAuthStorage } | undefined)?.authStorage;
+		if (!auth || typeof auth.pinSessionOAuthAccount !== "function") return;
+		const listAccounts = (provider: string) => {
+			try {
+				return [...(auth.listOAuthAccounts?.(provider, sessionId) ?? [])];
+			} catch {
+				return [];
+			}
+		};
+		for (const choice of planWorkerAccountPins(pins, listAccounts, labels)) {
+			auth.pinSessionOAuthAccount(choice.provider, sessionId, choice.credentialId);
+		}
+	} catch {
+		// A missing login or pin file must not block the worker.
+	}
 }
 
 function experimentAgentDir(): string {
@@ -605,6 +710,12 @@ function readPlanProvenance(ctx: ExtensionContext, brief: string): PlanProvenanc
 
 export function register(pi: ExtensionAPI): void {
 	catalog = loadCatalog();
+	const guidance = parseGuidance(guidanceData, process.env[guidanceData.overridesEnv]);
+	registerSubagentGuidance(pi, guidance);
+	registerReviewNotes(
+		pi,
+		parseReviewNotes(reviewNotesData, guidance.families, process.env[reviewNotesData.overridesEnv]),
+	);
 	let enabled = catalog.enabled;
 	let lastLine: string | undefined;
 
@@ -743,6 +854,10 @@ export function register(pi: ExtensionAPI): void {
 	pi.on("session_start", (_event, ctx) => {
 		restore(ctx);
 		claimChildReservation(ctx);
+		pinWorkerOAuthAccounts(ctx);
+	});
+	pi.on("before_agent_start", (_event, ctx) => {
+		pinWorkerOAuthAccounts(ctx);
 	});
 	pi.on("agent_end", (event, ctx) => settleChildReservation(pi, ctx, event));
 	pi.on("session_shutdown", (_event, _ctx) => pruneReservations([], Date.now()));
@@ -769,6 +884,8 @@ export function register(pi: ExtensionAPI): void {
 	});
 
 	pi.on("before_subagent_spawn", async (event, ctx) => {
+		// Core's own list; replaced below when routing picks a different one.
+		if (event.spawnKey !== undefined) rememberSpawnChain(ctx.agent.id, event.spawnKey, event.patterns);
 		catalog = loadCatalog();
 		let readinessUsage: UsageSummary | undefined;
 		if (catalog.planningReadiness.agents.includes(event.agent) && ctx.agent.kind === "main") {
@@ -1180,6 +1297,7 @@ export function register(pi: ExtensionAPI): void {
 			const counter = activePoolMember.counter ?? counterForModel(activePoolMember.model);
 			if (counter !== undefined) reservationToken(event.agent, active.exact, counter, Date.now());
 		}
+		if (event.spawnKey !== undefined) rememberSpawnChain(ctx.agent.id, event.spawnKey, model);
 		return {
 			model,
 			thinkingLevel: active.effort ? thinkingLevel(active.effort) : ThinkingLevel.Off,

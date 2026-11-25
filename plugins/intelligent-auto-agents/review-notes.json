@@ -1,0 +1,118 @@
+{
+  "overridesEnv": "IAA_REVIEW_NOTE_OVERRIDES",
+  "about": "Per-model checks added inside a returned <task-result> block. Family names resolve against this file's families, then guidance.json's. Source: the model-traits digest, 'Review lens per model'; evidence IDs are MT-xxx entries. Models with no logged findings get no entry. Rule for a check: a warning about a logged habit plus one small action the coordinator can do from the returned report or with one cheap command (`git status`, `git diff --stat`, run the tests, one grep). Never ask the coordinator to read a transcript, an error trail or a whole diff.",
+  "families": {
+    "claude-haiku": ["*claude-haiku*"],
+    "claude-sonnet": ["*claude-sonnet*"],
+    "claude-opus": ["*claude-opus*"],
+    "gpt-terra": ["*gpt-6.1-terra*"],
+    "gpt-sol-6.2": ["*gpt-6.2-sol*"],
+    "gpt-luna-5.6": ["*gpt-5.6-luna*"],
+    "gpt-luna-6": ["*gpt-6-luna*"],
+    "hy4": ["*hy4*"],
+    "grok-4.6": ["*grok-4.6*"],
+    "glm": ["*glm-5.3*"]
+  },
+  "notes": {
+    "claude-haiku": {
+      "id": "RN-haiku",
+      "enabled": true,
+      "displayName": "Claude Haiku",
+      "checks": [
+        { "text": "It has reported done with the project's tests broken: run them before you accept.", "evidence": ["MT-062"] },
+        { "text": "It fixes the reported case and can break a neighbour: run the whole test file, not one case.", "evidence": ["MT-033"] }
+      ]
+    },
+    "claude-sonnet": {
+      "id": "RN-sonnet",
+      "enabled": true,
+      "displayName": "Claude Sonnet",
+      "checks": [
+        { "text": "If its report mentions added waits or retries for stale data, ask for a fix at the data source instead.", "evidence": ["MT-035"] },
+        { "text": "If it stopped over a blocked cleanup, check the main work is finished.", "evidence": ["MT-023"] }
+      ]
+    },
+    "claude-opus": {
+      "id": "RN-opus",
+      "enabled": true,
+      "displayName": "Claude Opus",
+      "checks": [
+        { "text": "If its report shows only that the error is gone, ask what proves the required result.", "evidence": ["MT-037"] }
+      ]
+    },
+    "gpt-terra": {
+      "id": "RN-terra",
+      "enabled": true,
+      "displayName": "GPT-6.1 Terra",
+      "checks": [
+        { "text": "It adds test files outside the brief: run `git status` and compare the file list with the brief.", "evidence": ["MT-073"] },
+        { "text": "Its own new tests can pass while the project's fail: run the project's tests.", "evidence": ["MT-074", "MT-055"] },
+        { "text": "If its report mentions helper agents or a time-out, treat the work as unfinished until you check the result.", "evidence": ["MT-016"] }
+      ]
+    },
+    "gpt-sol-6.2": {
+      "id": "RN-sol-6.2",
+      "enabled": true,
+      "displayName": "GPT-6.2 Sol",
+      "checks": [
+        { "text": "It rewrites existing tests to fit its change: run `git diff --stat` and, if an existing test file changed, read that hunk before you trust 'tests pass'.", "evidence": ["MT-043"] }
+      ]
+    },
+    "gpt-luna-5.6": {
+      "id": "RN-luna-5.6",
+      "enabled": true,
+      "displayName": "GPT-5.6 Luna",
+      "checks": [
+        { "text": "Most of its failures claimed a passing suite: run the project's tests.", "evidence": ["MT-069"] },
+        { "text": "On a wrong displayed value, check with `git diff --stat` that the file that computes the value changed, not only the display file.", "evidence": ["MT-005"] },
+        { "text": "At extra high or max effort, if its report mentions helper agents or a time-out, treat the work as unfinished.", "evidence": ["MT-058"] }
+      ]
+    },
+    "gpt-luna-6": {
+      "id": "RN-luna-6",
+      "enabled": true,
+      "displayName": "GPT-6 Luna",
+      "checks": [
+        { "text": "Most of its failures claimed a green suite: run the project's tests.", "evidence": ["MT-071"] },
+        { "text": "It quits early: if its report says 'did not run', 'partially' or 'incomplete', send the task again.", "evidence": ["MT-071", "MT-041"] },
+        { "text": "It has written a test suite that hangs: grep the changed test files for `mock.module` on built-in modules.", "evidence": ["MT-072"] }
+      ]
+    },
+    "hy4": {
+      "id": "RN-hy4",
+      "enabled": true,
+      "displayName": "HY4",
+      "checks": [
+        { "text": "Nearly all its failures report done: run the project's tests.", "evidence": ["MT-065"] },
+        { "text": "It edits test expectations to fit its code: run `git diff --stat` and read any changed existing test file.", "evidence": ["MT-065"] },
+        { "text": "On a wrong displayed value, check with `git diff --stat` that the file that computes the value changed.", "evidence": ["MT-066"] },
+        { "text": "It leaves extra files such as findings.md: run `git status` and compare with the brief.", "evidence": ["MT-073"] }
+      ]
+    },
+    "deepseek": {
+      "id": "RN-deepseek",
+      "enabled": true,
+      "displayName": "DeepSeek",
+      "checks": [
+        { "text": "It says done with items missing: match its report against the brief's list of deliverables.", "evidence": ["MT-026"] },
+        { "text": "It leaves probes, backups and helper files: run `git status` and look for untracked files.", "evidence": ["MT-027", "MT-004"] }
+      ]
+    },
+    "grok-4.6": {
+      "id": "RN-grok-4.6",
+      "enabled": true,
+      "displayName": "Grok 4.6",
+      "checks": [
+        { "text": "At low effort on a wrong displayed value, check with `git diff --stat` that the file that computes the value changed.", "evidence": ["MT-047"] }
+      ]
+    },
+    "glm": {
+      "id": "RN-glm",
+      "enabled": true,
+      "displayName": "GLM 5.3",
+      "checks": [
+        { "text": "If it reports a change as already done, open the file and confirm; it trusts git history.", "evidence": ["MT-049"] }
+      ]
+    }
+  }
+}

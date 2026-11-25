@@ -71,7 +71,7 @@ mock.module("@oh-my-pi/pi-coding-agent", () => ({
 	getSupportedEfforts: (model: { thinking: { efforts: string[] } }) => model.thinking.efforts,
 }));
 
-const { register, resetSpeedPoolStateForTests, setCatalogForTests, setExperimentAgentDirForTests } = await import("./runtime");
+const { register, resetSpeedPoolStateForTests, setAccountPinIoForTests, setCatalogForTests, setExperimentAgentDirForTests } = await import("./runtime");
 
 interface RoutingTestModel {
 	provider: string;
@@ -118,6 +118,7 @@ interface Fixture {
 	workingMessages: Array<string | undefined>;
 	notifications: Array<[string, string | undefined]>;
 	ctx: Record<string, unknown>;
+	oauthPins: Array<[string, number]>;
 }
 
 const experimentScratch = mkdtempSync(join(tmpdir(), "iaa-experiment-"));
@@ -144,6 +145,9 @@ function createFixture(
 		usageError?: Error;
 		usageReportsImpl?: (options: { signal: AbortSignal }) => Promise<unknown>;
 		oauthCredentials?: Record<string, readonly unknown[]>;
+		oauthAccounts?: Record<string, readonly { provider: string; credentialId: number; email?: string }[]>;
+		accountPin?: string;
+		accountLabels?: string;
 		experiment?: boolean;
 		catalog?: Catalog;
 		agentDir?: string;
@@ -154,16 +158,26 @@ function createFixture(
 	const statuses: Array<[string, string | undefined]> = [];
 	const workingMessages: Array<string | undefined> = [];
 	const notifications: Array<[string, string | undefined]> = [];
+	const oauthPins: Array<[string, number]> = [];
 	const bindings = options.bindings ?? DEFAULT_BINDINGS;
 	const models = { list: () => Object.values(bindings), resolve: (pattern: string) => bindings[pattern] };
 	setExperimentAgentDirForTests(options.agentDir ?? scratchDir());
+	if (options.accountPin !== undefined || options.accountLabels !== undefined) {
+		setAccountPinIoForTests({
+			pinText: () => options.accountPin,
+			labelsText: () => options.accountLabels,
+		});
+	}
 	if (options.catalog) {
 		setCatalogForTests(options.catalog);
 	} else if (options.experiment) {
-		setCatalogForTests(undefined);
+		const data = structuredClone(catalogData) as typeof catalogData;
+		data.poolLimits.ignoreQuota = [];
+		setCatalogForTests(parseCatalog(data));
 	} else {
 		const data = structuredClone(catalogData) as typeof catalogData & { experiment?: { enabled: boolean } };
 		if (data.experiment) data.experiment.enabled = false;
+		data.poolLimits.ignoreQuota = [];
 		setCatalogForTests(parseCatalog(data));
 	}
 	const mockPi = {
@@ -209,12 +223,17 @@ function createFixture(
 				credentials: {
 					credentials: (provider: string) => options.oauthCredentials?.[provider] ?? [{ credential: { type: "oauth" } }],
 				},
+				listOAuthAccounts: (provider: string) => options.oauthAccounts?.[provider] ?? [],
+				pinSessionOAuthAccount: (provider: string, _sessionId: string, credentialId: number) => {
+					oauthPins.push([provider, credentialId]);
+					return true;
+				},
 			},
 		},
 		models,
 	};
 	hooks.session_start?.({}, ctx);
-	return { hooks, entries, statuses, workingMessages, notifications, ctx };
+	return { hooks, entries, statuses, workingMessages, notifications, ctx, oauthPins };
 }
 
 function routeEvent(overrides: Record<string, unknown> = {}) {
@@ -346,6 +365,35 @@ describe("intelligent auto-agents runtime", () => {
 		expect(judgeRequests[0].state).toContain("Routing guidance:");
 	});
 
+	test("worker sessions pin the OAuth login email from the local pin file", () => {
+		reset();
+		const fixture = createFixture({
+			agent: { kind: "sub", name: "task", depth: 1 },
+			sessionId: "session-worker",
+			accountPin: "anthropic: extra@example.com",
+			oauthAccounts: {
+				anthropic: [
+					{ provider: "anthropic", credentialId: 1, email: "primary@example.com" },
+					{ provider: "anthropic", credentialId: 2, email: "extra@example.com" },
+				],
+			},
+		});
+		expect(fixture.oauthPins).toEqual([["anthropic", 2]]);
+	});
+
+	test("main sessions ignore the worker account pin file", () => {
+		reset();
+		const fixture = createFixture({
+			accountPin: "anthropic: extra@example.com",
+			oauthAccounts: {
+				anthropic: [{ provider: "anthropic", credentialId: 2, email: "extra@example.com" }],
+			},
+		});
+		expect(fixture.oauthPins).toEqual([]);
+	});
+
+
+
 	test("case: DLG-001 routes bounded scout evidence through economical mechanical work", async () => {
 		reset();
 		routeChoice = "mechanical";
@@ -470,18 +518,22 @@ describe("intelligent auto-agents runtime", () => {
 		expect(decisionData(fixture).reason).toBe("routing-unavailable");
 	});
 
-	test("case: DLG-008 applies Codex quota gates in the spawn hook", async () => {
+	test("case: DLG-008 ignores Codex quota reports in the spawn hook", async () => {
 		reset();
 		routeChoice = "code";
 		difficultyScore = 1;
 		const fixture = createFixture({
+			catalog: parseCatalog(catalogData),
 			usageReports: [usage("anthropic", 0.99), usage("xai-oauth", 0.99), usage("openai-codex", 0.99)],
 		});
 		const result = await spawn(fixture);
 
-		expect(result).toMatchObject({ model: ["openscale/deepseek/deepseek-v4.1-flash-1017"], thinkingLevel: "high" });
+		expect(result).toMatchObject({
+			model: ["openai-codex/gpt-6.1-terra", "openscale/deepseek/deepseek-v4.1-flash-1017:low"],
+			thinkingLevel: "medium",
+		});
 		expect(decisionData(fixture).pool).toMatchObject({
-			verdicts: { "openai-codex/gpt-6.1-terra": { status: "skipped" } },
+			verdicts: { "openai-codex/gpt-6.1-terra": { status: "eligible" } },
 		});
 	});
 

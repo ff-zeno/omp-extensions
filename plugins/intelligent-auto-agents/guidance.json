@@ -1,0 +1,216 @@
+{
+  "overridesEnv": "IAA_GUIDANCE_OVERRIDES",
+  "block": {
+    "id": "block",
+    "enabled": true,
+    "evidence": "allocation notes §3; children receive no AGENTS.md (task/executor.ts excludeAgentsMd)",
+    "switches": {
+      "G1": {
+        "enabled": true,
+        "evidence": "guidance-and-sets notes §1 G1, merged into the block's first two scope lines (allocation notes §3)"
+      },
+      "R1": {
+        "enabled": true,
+        "evidence": "allocation notes §3 'Repository AGENTS.md for subagents': variant R1 keeps the repository-read sentence until the later notes §3 resolve R0 against R1"
+      }
+    },
+    "text": [
+      "<subagent-rules>",
+      "You are a subagent. You do not receive the operator's global rules or the repository's AGENTS.md.",
+      "These rules add the parts your system prompt lacks. Your assignment can narrow them. It never widens them.",
+      "Where a rule says to ask, report to your parent instead.",
+      "",
+      "# Scope and worktree",
+      {
+        "id": "G1",
+        "text": "- Your assigned checkout is the source of project state. Use relative paths. Outside it, read only the paths that your assignment or your system prompt names. Report any other need to your parent before you act on it."
+      },
+      {
+        "id": "G1",
+        "text": "- Do not use another checkout, or the history of another repository, to decide what is already done."
+      },
+      {
+        "id": "R1",
+        "text": "- Before editing, read the repository AGENTS.md sections that cover the files you change, unless your assignment already states those rules."
+      },
+      "- Before editing, run `git status` so you can tell your changes from existing ones.",
+      "- Commit only when your assignment includes a commit. Include only your own changes, through the selective commit helper your system prompt describes. If you do not have that helper, report to your parent instead of staging whole files.",
+      "- Do not create, switch, remove, rename, detach, rebase, or force-update a branch or worktree, except for a Git operation that your assignment explicitly gives you.",
+      "- Never add agent co-authors.",
+      "",
+      "# Secrets and external sources",
+      "- Use secrets only when your assignment gives that permission. Then read the Secrets section of the agent-workflows file that your system prompt names before you inject a secret or list secret names.",
+      "- When your assignment depends on current external API, library, or CLI behaviour and allows you to look it up, use primary documentation.",
+      "",
+      "# Writing prose and code",
+      "- Before writing persisted prose (docs, plans, PR bodies, commit messages, skill text, tracker comments), read the technical-writing skill, then unslop. In long Markdown, put each full sentence on its own line.",
+      "- Before writing or restructuring code, read engineering-principles and only the leaves whose trigger matches.",
+      "",
+      "# Running and checking",
+      "- Resolve a harmless ambiguity with an assumption and state it in your report. Report a material choice about behaviour, scope, data, risk, or authority to your parent.",
+      "- Judge effort by what you must run and check, not by human staffing estimates. Do not shrink an assigned solution because it looks large.",
+      "- Before heavy work, a service, or a browser, read the Execution and Verification and the Browsers sections of the agent-workflows file that your system prompt names. Reuse the worktree's running dev server.",
+      "- Before an assigned Git, worktree, or PR operation, read the Git and External Actions section of the same file. Fix PR review findings on that PR's head branch.",
+      "</subagent-rules>"
+    ]
+  },
+  "families": {
+    "anthropic": [
+      "anthropic/*"
+    ],
+    "deepseek": [
+      "*deepseek*"
+    ],
+    "native-read": [
+      "anthropic/*",
+      "*deepseek*",
+      "*glm-5.3-flash*"
+    ]
+  },
+  "lines": {
+    "G13": {
+      "enabled": false,
+      "scope": {
+        "all": true
+      },
+      "text": "When the next reads or searches do not depend on each other, issue them in one turn.",
+      "evidence": "verification notes claim 5; tool-use notes §2-5, §8 (84% of 73,580 tool turns have one call). Repeats SYSTEM.md Tool Policy; single-line cell only. Off since 2026-11-25: duplicates SYSTEM.md Tool Policy ('Make independent tool calls together in one reply')."
+    },
+    "G17": {
+      "enabled": false,
+      "scope": {
+        "family": "native-read"
+      },
+      "text": "Read files with `read` and search with `grep` or `glob`. Use bash only to run programs.",
+      "evidence": "tool-use notes §2-5, §8: shell share of read and search calls is Anthropic 48%, DeepSeek 69%, GLM 56%. Repeats SYSTEM.md Tool Policy; single-line cell only. Off since 2026-11-25: duplicates SYSTEM.md Tool Policy and is enforced by the Bash Interceptor."
+    },
+    "G18": {
+      "enabled": true,
+      "scope": {
+        "all": true,
+        "editFormat": "hash-anchored"
+      },
+      "text": "Make related changes in one edit. When an edit is rejected because its tag or anchor is stale, re-read the file and use the new tag. When it is rejected for its format, correct the format and keep the tag.",
+      "evidence": "verification notes claim 6 (Haiku anchor errors in 78 of 286 runs); tool-use notes §5: 1,211 of 12,492 edits fail"
+    },
+    "G29": {
+      "enabled": true,
+      "scope": {
+        "family": "anthropic"
+      },
+      "text": "If a tool rejects your call for its arguments or format, change the call before you send it again. After a time-out or network failure, retry once only a read or another operation that is safe to repeat. For a write or a spawn, first check whether it took effect. If you cannot tell, report that to your parent.",
+      "evidence": "tool-use notes §2-5, §8: 18% of 538 Anthropic errors resent unchanged; wording from the round-2 decisions, H3"
+    },
+    "G30": {
+      "enabled": true,
+      "scope": {
+        "models": [
+          "xai-oauth/grok-4.6"
+        ]
+      },
+      "text": "A read range is `start-end` with end at least start, or `start+count`.",
+      "evidence": "tool-use notes §5: 52 of 79 grok-4.6 read errors are `end must be >= start`, all in one run (round-2 decisions, M1)"
+    },
+    "G31": {
+      "enabled": true,
+      "scope": {
+        "family": "deepseek"
+      },
+      "text": "Finish the related edits before you run tests. Do not rerun a test when nothing changed since its last run.",
+      "evidence": "DeepSeek notes §4: 3-4 test runs and 7-9.5 edits per run against 1 and 4 for terra and Haiku"
+    },
+    "G32": {
+      "enabled": true,
+      "scope": {
+        "family": "deepseek"
+      },
+      "text": "Every reply that gathers information sends all of its independent calls together, in that one reply. Before you send a read, a search or a listing, decide what else you will need that does not depend on its result, and add those calls to the same reply. Only a call that needs an earlier result waits for the next reply.\n\nExample of one reply with three calls:\n- `read` with path `src/config.ts:1-80`\n- `grep` for `loadConfig` in `src`\n- `bash` with `git log --oneline -5 -- src/config.ts`\n\nPut the related changes to one file in one `edit` call, then run the check once.",
+      "evidence": "Text is the worker-model eval's batching-screen variant v1 verbatim, the variant the deepseek-v1 arm sent; the worker-model eval's model instruction table, DS V4.1 Flash row: round trips 30.5 to 26.7, time 232 to 185 s, pass 100% to 98%. Live since 2026-11-25 by operator decision. Model-specific repeat of the SYSTEM.md batching rule; G13 (all models) stays off."
+    },
+    "G33": {
+      "enabled": true,
+      "scope": {
+        "models": [
+          "*gpt-6.1-terra*"
+        ],
+        "roles": [
+          "implementer",
+          "scout",
+          "reviewer",
+          "verifier",
+          "git",
+          "design"
+        ]
+      },
+      "text": "Do all of this work yourself. You may not delegate any part of it: do not start sub-agents, tasks, or background agents by any tool or helper.",
+      "evidence": "MT-016 in the model-traits digest: 0 of 140 Terra runs delegate once the brief carries this sentence (the eval runner's no-delegation sentence, verbatim). Leaf roles only, the same list as G8; closes the eval agent()/workpool routes that G8 leaves open. Live since 2026-11-25 by operator decision."
+    }
+  },
+  "roles": {
+    "task": "implementer",
+    "sonic": "implementer",
+    "medium": "implementer",
+    "slow1": "implementer",
+    "slow2": "implementer",
+    "slow3": "implementer",
+    "scout": "scout",
+    "explore": "scout",
+    "reviewer": "reviewer",
+    "review-frontier-1": "reviewer",
+    "review-frontier-2": "reviewer",
+    "review-frontier-3": "reviewer",
+    "review-closer": "reviewer",
+    "security-reviewer": "reviewer",
+    "review-verifier": "verifier",
+    "git": "git",
+    "design-master": "design",
+    "design-second": "design",
+    "plan": "planner",
+    "orchestrator": "orchestrator"
+  },
+  "toolSets": {
+    "G8": {
+      "enabled": true,
+      "roles": [
+        "implementer",
+        "scout",
+        "reviewer",
+        "verifier",
+        "git",
+        "design"
+      ],
+      "remove": [
+        "task",
+        "wait"
+      ],
+      "evidence": "verification notes claim 3: 0 of 140 runs delegate with the no-delegation sentence; delegated runs pass 23/41 against 216/236 (guidance-and-sets notes §5, decision 7)"
+    }
+  },
+  "spawnRoutes": {
+    "task": {
+      "tools": [
+        "task"
+      ],
+      "closedBy": "G8"
+    },
+    "eval.tool.task": {
+      "tools": [
+        "eval",
+        "task"
+      ],
+      "closedBy": "G8"
+    },
+    "eval.agent": {
+      "tools": [
+        "eval"
+      ],
+      "knownOpen": "Checks only the session spawn policy, fixed from the agent's spawns front matter at child creation (task/structured-subagent.ts:341-363); no extension API changes it, and routing: \"off\" skips before_subagent_spawn (structured-subagent.ts:707)."
+    },
+    "eval.workpool": {
+      "tools": [
+        "eval"
+      ],
+      "knownOpen": "Same path and limit as eval.agent (eval/js/tool-bridge.ts workpool bridge -> runStructuredSubagent)."
+    }
+  }
+}
