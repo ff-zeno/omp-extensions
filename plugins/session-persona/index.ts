@@ -123,6 +123,9 @@ const PERSONA_SUGGESTIONS = Symbol.for("omp.persona-suggestions.v1");
 interface Registry {
 	mode: Map<string, SessionMode>;
 	pendingMode: Map<string, PendingMode[]>;
+	/** Each subagent session's mode, settled on first read so every plugin sees one answer whatever its handler order. */
+	childMode: Map<string, SessionMode>;
+	resolveChildMode(ctx: ExtensionContext): SessionMode;
 	getMode(sessionId: string): SessionMode;
 	setMode(sessionId: string, mode: SessionMode): void;
 	paint(sessionId: string, tick: number): string;
@@ -164,18 +167,22 @@ function getRegistry(): Registry {
 	const registry = g[REGISTRY_KEY] ??= {
 		mode: new Map(),
 		pendingMode: new Map(),
+		childMode: new Map(),
+		resolveChildMode,
 		getMode,
 		setMode,
 		paint,
 	};
 	registry.mode ??= new Map();
 	registry.pendingMode ??= new Map();
+	registry.childMode ??= new Map();
 	for (const queued of registry.pendingMode.values()) {
 		if (!Array.isArray(queued)) {
 			registry.pendingMode.clear();
 			break;
 		}
 	}
+	registry.resolveChildMode = resolveChildMode;
 	registry.getMode = getMode;
 	registry.setMode = setMode;
 	registry.paint = paint;
@@ -239,6 +246,18 @@ function sessionWorkerName(ctx: ExtensionContext): string | undefined {
 	if (!file) return undefined;
 	const base = basename(file, extname(file));
 	return base && base !== "main" ? base : undefined;
+}
+
+function resolveChildMode(ctx: ExtensionContext): SessionMode {
+	const registry = getRegistry();
+	const id = sessionId(ctx);
+	const settled = registry.childMode.get(id);
+	if (settled) return settled;
+	const pending = takePendingMode(ctx);
+	const suggested = takePersonaSuggestion(ctx);
+	const mode = pending?.explicit ? pending.mode : (suggested ?? pending?.mode ?? getMode(id));
+	registry.childMode.set(id, mode);
+	return mode;
 }
 
 function takePendingMode(ctx: ExtensionContext): PendingMode | undefined {
@@ -545,19 +564,13 @@ export default function sessionPersona(pi: ExtensionAPI): void {
 	pi.on("session_shutdown", (_event, ctx) => {
 		const id = sessionId(ctx);
 		getRegistry().mode.delete(id);
+		getRegistry().childMode.delete(id);
 		clearPendingModes(getRegistry(), ctx.agent.id);
 		clearPersonaSuggestions(ctx.agent.id);
 	});
 
 	pi.on("before_agent_start", (event, ctx) => {
-		const subagent = ctx.agent.kind === "sub";
-		const pending = subagent ? takePendingMode(ctx) : undefined;
-		const suggested = subagent ? takePersonaSuggestion(ctx) : undefined;
-		const mode = !subagent
-			? getMode(sessionId(ctx))
-			: pending?.explicit
-				? pending.mode
-				: suggested ?? pending?.mode ?? getMode(sessionId(ctx));
+		const mode = ctx.agent.kind === "sub" ? resolveChildMode(ctx) : getMode(sessionId(ctx));
 		if (mode === "normal") {
 			setMode(sessionId(ctx), "normal");
 			return;

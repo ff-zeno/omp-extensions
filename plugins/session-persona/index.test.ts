@@ -284,6 +284,33 @@ describe("session persona modes", () => {
 		expect(result?.systemPrompt?.join("\n")).toContain("Execute the user's asked action");
 	});
 
+	test("an orchestrate task.mode without a header resolves the same whichever plugin reads first", () => {
+		const hooks = registerExtension();
+		const parent = context("order-parent", "main");
+		dispatch(hooks, parent, {
+			tasks: [
+				{ name: "reader-first-worker", mode: "orchestrate", task: "Run the plan." },
+				{ name: "persona-first-worker", mode: "orchestrate", task: "Run the plan." },
+			],
+		});
+		const resolve = (ctx: ExtensionContext) =>
+			(registry() as unknown as { resolveChildMode(ctx: ExtensionContext): SessionMode }).resolveChildMode(ctx);
+		const child = (name: string) =>
+			context(`${name}-session`, name, {
+				agent: { kind: "sub", id: `${name}-agent`, name: "task", depth: 1, parentId: "order-parent" },
+			});
+
+		const readerFirst = child("reader-first-worker");
+		expect(resolve(readerFirst)).toBe("orchestrate");
+		const afterReader = hooks.get("before_agent_start")?.({ systemPrompt: [subagentPrompt, normalPrompt()] }, readerFirst);
+		expect(afterReader?.systemPrompt?.join("\n")).toContain("Dispatcher for this Oh My Pi session.");
+
+		const personaFirst = child("persona-first-worker");
+		const afterPersona = hooks.get("before_agent_start")?.({ systemPrompt: [subagentPrompt, normalPrompt()] }, personaFirst);
+		expect(afterPersona?.systemPrompt?.join("\n")).toContain("Dispatcher for this Oh My Pi session.");
+		expect(resolve(personaFirst)).toBe("orchestrate");
+	});
+
 	test("resolves pending persona using the session filename when the session name is empty", () => {
 		const hooks = registerExtension();
 		const parent = context("session-file-parent", "main");
