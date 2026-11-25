@@ -226,20 +226,10 @@ Use `/auto-agents on` to enable routing for the current session.
 
 The command never changes the current chat model.
 
-## Split test (temporary)
+## Split test
 
-Until 2026-12-15 each `mechanical`, `commit`, and `code` slot rotates the candidates below so every model sees a comparable share of jobs.
-Set `experiment.enabled` to `false` in `catalog.json` to switch the test off.
-The pool tables describe the quota rollover that returns after the test ends.
-
-| Pools | Difficulty | Candidates, in rotation order |
-|---|---|---|
-| `mechanical`, `commit` | exact, ordinary | Haiku low, Terra low, DeepSeek low, Grok low |
-| `mechanical`, `commit` | hard | Terra medium, Sonnet low, DeepSeek low, Grok high |
-| `code` | exact | Haiku low, Terra low, DeepSeek low, Grok low |
-| `code` | ordinary | Terra medium, Haiku medium, DeepSeek low, Sonnet low, Grok high |
-| `code` | hard | Terra high, Sonnet medium, DeepSeek high, Sol low, Grok high |
-| `mechanical`, `commit`, `code` | critical | Sol medium, Sonnet high, Terra high |
+No split test is running; the `worker-split-2026-11` test ended on 2026-11-25 and its `experiment` block was removed from `catalog.json`.
+The rotation code stays: adding an `experiment` block to the catalog starts a new test, which replaces the named pools with a round-robin rotation of its candidates until its end date.
 
 ## Editing `catalog.json`
 
