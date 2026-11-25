@@ -33,7 +33,7 @@ Requirements:
 - `git` and Bun 1.4.4 or newer to build the patched OMP (OMP 19.1.1 declares `bun@>=1.4.4`). Running the plugin needs only OMP.
 - `sha256sum` (Linux) or `shasum` (macOS) for the installer.
 - Rust `cargo` from rustup only when no matching prebuilt native addon is in `~/.omp/natives/<version>`; running the stock `omp` once fills that directory.
-- A TypeSafe API key for Jev (see [TypeSafe authentication](#typesafe-authentication)). Without one, every spawn keeps its configured model and effort.
+- A TypeSafe API key for Jev (see [TypeSafe authentication](#typesafe-authentication)). Without one, ordinary automatic spawns (`task`, `sonic`, `scout`, and the other covered agents) stop and ask the parent to clarify instead of running; pinned agents and briefs that name a model keep their configured model.
 
 ### Setup checklist
 
@@ -52,7 +52,7 @@ Run these steps in order and check each result before the next; an AI agent sett
 4. Bind the `modelRoles` keys in `~/.omp/agent/config.yml` ([Model roles](#model-roles)).
 5. Store a TypeSafe key: run `/login typesafe` inside OMP, or export `TYPESAFE_API_KEY` before starting OMP.
 6. Restart OMP. `omp plugin list` lists `intelligent-auto-agents`, and `/auto-agents status` reports `Auto-agents on`.
-7. Spawn one `task` subagent, then run `/auto-agents status` again. The latest routing line names a task type and model. A line with `fallback · routing auth · baseline kept` means OMP found no TypeSafe key.
+7. Spawn one `task` subagent, then run `/auto-agents status` again. The latest routing line names a task type and model. A line with `fallback · routing auth · baseline kept` means OMP found no TypeSafe key, and the spawn returns a routing-unavailable reason to the parent.
 
 Every `omp update` replaces the patched binary with the stock release; rerun step 2 after each update.
 If the installer stops on a patch conflict, rebase the patch by hand as described in [core/PATCHING.md](core/PATCHING.md) and rerun it.
@@ -172,7 +172,7 @@ The catalog and bundled agent frontmatter reference these `modelRoles` names.
 
 `frontier-1`, `frontier-2`, and `frontier-3` are the three frontier models. `lead` aliases one of them, and the pinned `review-frontier-1`, `review-frontier-2`, and `review-frontier-3` agents pin one frontier role each. `fast` is the cheap Anthropic member that follows OpenAI in the exact and ordinary cells of the worker pools, `task` is the unrouted baseline worker (`@frontier-1:low`, Opus), `vision` serves the `vision` task type, and `orchestrator` binds the bundled `orchestrator` agent.
 
-Coding work goes through three slots: Mechanical, Moderate difficulty, and Feature work. Each slot has one pool per mode (see [Mode: speed or cost](#mode-speed-or-cost)) whose members fix model and effort per provider and are tried in order Anthropic → OpenAI (`openai-codex/gpt-6.1-terra` or `openai-codex/gpt-6.1-sol`) → Grok 4.6 → `opencode-go/hy4-flash-free` → `opencode-go/deepseek-v4.1-flash`. Difficulty never changes a slot's effort. Values come from the Speed and Cost tables in `docs/exec-plans/active/slot-routing/routing-table.md` (decided 2026-11-25).
+Coding work goes through three slots: Mechanical, Moderate difficulty, and Feature work. Each slot has one pool per mode (see [Mode: speed or cost](#mode-speed-or-cost)) whose members fix model and effort per provider and are tried in order Anthropic → OpenAI (`openai-codex/gpt-6.1-terra` or `openai-codex/gpt-6.1-sol`) → Grok 4.6 → `opencode-go/hy4-flash-free` → `opencode-go/deepseek-v4.1-flash`. Difficulty never changes a slot's effort. The author chose these values on 2026-11-25; edit the `slots` pools in `catalog.json` to use your own.
 
 Sonnet has no role. The catalog names it as the literal `anthropic/claude-sonnet-5-5`; it is no longer capped at low.
 
