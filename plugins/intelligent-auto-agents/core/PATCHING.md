@@ -64,10 +64,11 @@ CLONE="$PWD/.tmp/oh-my-pi-v$NEW"
 ### docs/extensions.md
 
 Adds five lines under the `before_subagent_spawn` entry describing API v2: routed backups stay in the child retry chain, model and effort locks, the `routing: "off"` opt-out, the task-only `solutionSpace` field, and fail-closed invalid returns.
+Adds one line saying the `<task-result>` envelope names the model, effort, and fallback.
 
 ### packages/coding-agent/CHANGELOG.md
 
-One `[Unreleased]` bullet summarizing the hook extension.
+Two `[Unreleased]` bullets: one for the hook extension, one for the `<task-result>` model attributes.
 
 ### packages/coding-agent/src/extensibility/extensions/types.ts
 
@@ -110,6 +111,12 @@ Adds `routing` to `WorkPoolCreateOptions` and forwards it into `runStructuredSub
 ### packages/coding-agent/src/task/executor.ts
 
 Builds the fallback chain by unioning the routed selectors (or inherited chain) with the resolved primary's configured model-key chain, preserving routed backups.
+
+### packages/coding-agent/src/task/result-summary.ts and src/prompts/tools/task-summary.md
+
+Add `model="<provider>/<id>"` (from `resolvedModelIdentity`, else `resolvedModel` without its `:level` suffix), `effort` (from `resolvedThinkingLevel`), and `fallback="true"` (only when `resolvedModelIsFallback`) to the `<task-result>` opening tag; an absent value omits its attribute.
+Every delivery path (task return, `wait`, background `async-result` notice, IRC wake relay, restore) renders through `formatTaskResultSummary`, so the plugin's review notes can find the model on each one.
+`test/task/result-summary.test.ts` covers present, absent, and fallback attributes.
 
 ### packages/coding-agent/src/session/turn-recovery.ts
 

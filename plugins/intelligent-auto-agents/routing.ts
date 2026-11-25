@@ -168,6 +168,28 @@ export type Catalog = {
 	experiment?: CatalogExperiment;
 };
 
+/** Providers workers may pin from the machine-local account-pin file. */
+export const OAUTH_PIN_PROVIDERS = ["anthropic", "openai-codex", "xai-oauth"] as const;
+
+/** Worker OAuth pin: `account`/`source`/`all` covers every provider; other keys are provider ids. Values are login emails. */
+export type WorkerAccountPins = {
+	all?: string;
+	byProvider: Record<string, string>;
+};
+
+export type OAuthAccountRow = {
+	provider: string;
+	credentialId: number;
+	email?: string;
+	accountId?: string;
+	orgId?: string;
+	orgName?: string;
+};
+
+export type AccountLabelTable = { order: string[]; tokens: Map<string, string[]> };
+
+export type WorkerAccountPinChoice = { provider: string; credentialId: number };
+
 export type PlanningRoute = "autonomous-plan" | "discuss-with-user";
 export type UsageSummary = { inputTokens?: number; outputTokens?: number; totalTokens?: number; cost?: number };
 export type PlanningReadiness = {
@@ -584,8 +606,8 @@ export function parseCatalog(value: unknown): Catalog {
 
 	assertModelSafeMap(value as Record<string, unknown>, pools, taskTypes, reviewOnly, value.blockedDirectiveTargets);
 
-	const experiment = value.experiment === undefined ? undefined : parseExperiment(value.experiment, pools, reviewOnly);
 
+	const experiment = value.experiment === undefined ? undefined : parseExperiment(value.experiment, pools, reviewOnly);
 	return {
 		version: 9,
 		enabled: value.enabled,
@@ -634,6 +656,153 @@ export function parseCatalog(value: unknown): Catalog {
 		directiveTargets: directives,
 		...(experiment ? { experiment } : {}),
 	};
+}
+
+function stripQuoted(value: string): string {
+	return value.trim().replace(/^["']|["']$/g, "");
+}
+
+function pinsFromRecord(value: unknown): WorkerAccountPins | undefined {
+	if (!record(value)) return undefined;
+	const byProvider: Record<string, string> = {};
+	let all: string | undefined;
+	for (const [key, raw] of Object.entries(value)) {
+		if (typeof raw !== "string") continue;
+		const name = key.trim().toLowerCase();
+		const source = raw.trim();
+		if (!name || !source) continue;
+		if (name === "source" || name === "all" || name === "account" || name === "use") all = source;
+		else byProvider[name] = source;
+	}
+	if (!all && Object.keys(byProvider).length === 0) return undefined;
+	return all ? { all, byProvider } : { byProvider };
+}
+
+/** Parse the machine-local worker account-pin file. Never read this from the public catalog. */
+export function parseWorkerAccountPins(text: string): WorkerAccountPins | undefined {
+	const trimmed = text.trim();
+	if (!trimmed) return undefined;
+	if (trimmed.startsWith("{")) return pinsFromRecord(JSON.parse(trimmed) as unknown);
+	const mapped: Record<string, string> = {};
+	for (const raw of trimmed.split(/\r?\n/)) {
+		const line = raw.trim();
+		if (!line || line.startsWith("#")) continue;
+		const mapping = /^([A-Za-z0-9_./-]+):\s*(.*)$/.exec(line);
+		if (mapping) {
+			const key = mapping[1]?.trim().toLowerCase() ?? "";
+			const source = stripQuoted(mapping[2] ?? "");
+			if (key && source) mapped[key] = source;
+			continue;
+		}
+		if (!line.includes(":") && mapped.source === undefined) mapped.source = stripQuoted(line);
+	}
+	return pinsFromRecord(mapped);
+}
+
+export function pinSourceForProvider(pins: WorkerAccountPins, provider: string): string | undefined {
+	return pins.byProvider[provider] ?? pins.all;
+}
+
+function labelTokens(value: unknown): string[] {
+	if (typeof value === "string") {
+		const token = stripQuoted(value);
+		return token ? [token] : [];
+	}
+	if (Array.isArray(value)) return value.flatMap(labelTokens);
+	return [];
+}
+
+/** Parse machine-local account-labels.yml/json. Empty or invalid input yields no labels. */
+export function parseAccountLabels(text: string): AccountLabelTable {
+	const trimmed = text.trim();
+	if (!trimmed) return { order: [], tokens: new Map() };
+	if (trimmed.startsWith("{")) {
+		const parsed: unknown = JSON.parse(trimmed);
+		if (!record(parsed)) return { order: [], tokens: new Map() };
+		const order: string[] = [];
+		const tokens = new Map<string, string[]>();
+		for (const [name, value] of Object.entries(parsed)) {
+			const source = name.trim();
+			if (!source) continue;
+			order.push(source);
+			tokens.set(source, labelTokens(value));
+		}
+		return { order, tokens };
+	}
+	const order: string[] = [];
+	const tokens = new Map<string, string[]>();
+	let current: string | undefined;
+	for (const raw of trimmed.split(/\r?\n/)) {
+		const line = raw.replace(/\t/g, "  ");
+		const cut = line.trim();
+		if (!cut || cut.startsWith("#")) continue;
+		const mapping = /^([^\s:#][^:]*):\s*(.*)$/.exec(line);
+		if (mapping && !line.startsWith(" ")) {
+			const source = mapping[1]?.trim() ?? "";
+			const rest = mapping[2]?.trim() ?? "";
+			if (!source) continue;
+			if (!tokens.has(source)) {
+				order.push(source);
+				tokens.set(source, []);
+			}
+			current = source;
+			if (rest && rest !== "|" && rest !== ">") tokens.get(source)?.push(...labelTokens(rest));
+			continue;
+		}
+		const item = /^\s+-\s+(.*)$/.exec(line);
+		if (item && current) tokens.get(current)?.push(...labelTokens(item[1] ?? ""));
+	}
+	return { order, tokens };
+}
+
+function oauthHaystack(account: OAuthAccountRow): Set<string> {
+	const tokens = [
+		account.email,
+		account.accountId,
+		account.accountId ? `account:${account.accountId}` : undefined,
+		account.orgId,
+		account.orgId ? `org:${account.orgId}` : undefined,
+		account.orgName,
+		account.email ? `email:${account.email}` : undefined,
+		String(account.credentialId),
+	];
+	return new Set(tokens.map(token => token?.trim().toLowerCase()).filter((token): token is string => Boolean(token)));
+}
+
+export function matchOAuthAccount(
+	accounts: readonly OAuthAccountRow[],
+	source: string,
+	labels: AccountLabelTable,
+): OAuthAccountRow | undefined {
+	const wanted = source.trim().toLowerCase();
+	if (!wanted) return undefined;
+	return accounts.find(account => {
+		const haystack = oauthHaystack(account);
+		if (haystack.has(wanted)) return true;
+		const local = account.email?.split("@")[0]?.trim().toLowerCase();
+		if (local === wanted) return true;
+		for (const [name, tokens] of labels.tokens) {
+			if (name.toLowerCase() !== wanted) continue;
+			if (tokens.some(token => haystack.has(token.trim().toLowerCase()))) return true;
+		}
+		return false;
+	});
+}
+
+export function planWorkerAccountPins(
+	pins: WorkerAccountPins,
+	listAccounts: (provider: string) => readonly OAuthAccountRow[],
+	labels: AccountLabelTable,
+): WorkerAccountPinChoice[] {
+	const providers = new Set<string>([...OAUTH_PIN_PROVIDERS, ...Object.keys(pins.byProvider)]);
+	const planned: WorkerAccountPinChoice[] = [];
+	for (const provider of providers) {
+		const source = pinSourceForProvider(pins, provider);
+		if (!source) continue;
+		const match = matchOAuthAccount(listAccounts(provider), source, labels);
+		if (match) planned.push({ provider, credentialId: match.credentialId });
+	}
+	return planned;
 }
 
 /** Active split-test slot for this pool and difficulty, or undefined when the test is off or ended. */

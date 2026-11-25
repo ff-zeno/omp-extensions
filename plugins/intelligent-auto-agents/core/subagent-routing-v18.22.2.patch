@@ -1,8 +1,8 @@
 diff --git a/docs/extensions.md b/docs/extensions.md
-index 11a622d2bc..1c44eb0535 100644
+index 11a622d2bc..256d6fa275 100644
 --- a/docs/extensions.md
 +++ b/docs/extensions.md
-@@ -667,6 +667,11 @@ and `/new`. Commands retain their explicit prefill and session-transition action
+@@ -667,6 +667,12 @@ and `/new`. Commands retain their explicit prefill and session-transition action
  ### Subagent lifecycle
  
  - `before_subagent_spawn` → `{ model?: string | string[]; block?: boolean; reason?: string; note?: string }`. Fires in the parent session exactly once per spawned child (`task`, eval `agent()`, workpool workers), at dispatch before the child resolves its model — never during a frontend's validation preflight, so stateful routers (round-robin, quota) advance once per child. The event carries `agent`, `invocationKind`, `modelRole` (the pre-expansion role alias, when any), the expanded `patterns` core would use, and an optional stable `spawnKey`. A returned `model` replaces the spawn's attempt-ordered patterns while keeping the role identity, so the remaining entries become the child's retry fallback chain; handlers run in extension order and the last returned `model` wins, along with its `note`, which the task UI shows as the spawn's routing reason on live, async, and settled rows. `block: true` refuses the spawn with `reason`. Cancelling the spawn releases an awaiting handler (its result is discarded and pending `ctx.ui` dialogs close) instead of holding the spawn until the handler timeout.
@@ -11,18 +11,20 @@ index 11a622d2bc..1c44eb0535 100644
 +  `routing: "off"` bypasses the hook for task entries and eval agent/workpool calls.
 +  Task spawns also carry the delegator's optional `solutionSpace` description; it is absent for eval `agent()`/workpool spawns.
 +  Invalid or unsupported model/effort returns fail closed.
++  A settled child's `<task-result>` envelope names the model that produced it (`model="<provider>/<id>"`), its `effort` when set, and `fallback="true"` when a retry fallback replaced the routed model, so a `context` handler can annotate results on every delivery path.
  
  ### Reliability/runtime signals
  
 diff --git a/packages/coding-agent/CHANGELOG.md b/packages/coding-agent/CHANGELOG.md
-index 1416be2991..cb51c516ef 100644
+index 1416be2991..f302e761b2 100644
 --- a/packages/coding-agent/CHANGELOG.md
 +++ b/packages/coding-agent/CHANGELOG.md
-@@ -1,6 +1,7 @@
+@@ -1,6 +1,8 @@
  # Changelog
  
  ## [Unreleased]
 +- Extended `before_subagent_spawn` for lock-aware model and thinking-level routing, cancellation, explicit `routing: "off"` opt-out, a task-only `solutionSpace` on the event, and subagent routing API v2; routed backups remain the subagent retry chain.
++- Added `model`, `effort`, and `fallback` attributes to the `<task-result>` envelope so the parent (and its extensions) can tell which model produced a subagent result.
  
  ## [18.22.2] - 2026-11-18
  
@@ -318,6 +320,16 @@ index 63d7ca4231..047df71145 100644
  // Hook system types (legacy re-export)
  // Skills
  export * from "./extensibility/skills";
+diff --git a/packages/coding-agent/src/prompts/tools/task-summary.md b/packages/coding-agent/src/prompts/tools/task-summary.md
+index 80ea6b3877..dd1f5858e1 100644
+--- a/packages/coding-agent/src/prompts/tools/task-summary.md
++++ b/packages/coding-agent/src/prompts/tools/task-summary.md
+@@ -1,4 +1,4 @@
+-<task-result id="{{id}}" agent="{{agentName}}" status="{{status}}" duration="{{duration}}">
++<task-result id="{{id}}" agent="{{agentName}}" status="{{status}}" duration="{{duration}}"{{#if model}} model="{{model}}"{{/if}}{{#if effort}} effort="{{effort}}"{{/if}}{{#if fallback}} fallback="true"{{/if}}>
+ {{#if truncated}}{{#if meta}}<meta lines="{{meta.lineCount}}" size="{{meta.charSize}}" />{{/if}}{{/if}}
+ {{#if abortReason}}
+ <abort-reason>{{abortReason}}{{#if resumable}} — the agent is still live with its full context; message it via `write agent://{{id}}` to resume instead of redoing the work.{{/if}}</abort-reason>
 diff --git a/packages/coding-agent/src/session/agent-session-types.ts b/packages/coding-agent/src/session/agent-session-types.ts
 index bc6510a3a4..a51d63661f 100644
 --- a/packages/coding-agent/src/session/agent-session-types.ts
@@ -473,6 +485,54 @@ index 72c0a28770..b280631d04 100644
  				...spawnModelFields(params),
  				...this.#resultParams(params),
  				...this.#effortParams(params),
+diff --git a/packages/coding-agent/src/task/result-summary.ts b/packages/coding-agent/src/task/result-summary.ts
+index 26ca0dc851..9f150b1f2c 100644
+--- a/packages/coding-agent/src/task/result-summary.ts
++++ b/packages/coding-agent/src/task/result-summary.ts
+@@ -48,6 +48,26 @@ function previewHead(output: string): string {
+ 	return lastNewline >= PREVIEW_CHARS / 2 ? slice.slice(0, lastNewline) : slice;
+ }
+ 
++/** Thinking-level suffixes `resolvedModel` may carry (`<provider>/<id>:<level>`). */
++const THINKING_SUFFIX = /:(?:off|minimal|low|medium|high|xhigh|max|auto|inherit)$/;
++
++/**
++ * Model that produced the result, as `<provider>/<id>` with no thinking suffix,
++ * so a parent (or an extension rewriting the parent's context) can tell which
++ * model's work it is reading even when the delivery path carries no details.
++ */
++function resultModel(result: SingleResult): string | undefined {
++	const identity = result.resolvedModelIdentity?.trim();
++	if (identity) return identity;
++	const resolved = result.resolvedModel?.trim().replace(THINKING_SUFFIX, "");
++	return resolved || undefined;
++}
++
++/** Escape a value for a double-quoted envelope attribute. */
++function attr(value: string): string {
++	return escapeHarnessTags(value).replaceAll('"', "&quot;");
++}
++
+ /** Render the `<task-result>` envelope for a settled run. */
+ export function formatTaskResultSummary(
+ 	result: SingleResult,
+@@ -71,12 +91,16 @@ export function formatTaskResultSummary(
+ 	// irc instead of redoing the work. Isolated runs are parked without a
+ 	// reviver (their worktree is gone), so they must not read as resumable.
+ 	const resumable = result.aborted && !result.isolated && isResumable(AgentRegistry.global().get(result.id));
++	const model = resultModel(result);
+ 	const render = (truncated: boolean): string =>
+ 		prompt.render(taskSummaryTemplate, {
+ 			agentName: result.agent,
+ 			id: result.id,
+ 			status,
+ 			duration: formatDuration(options.totalDurationMs),
++			model: model === undefined ? undefined : attr(model),
++			effort: result.resolvedThinkingLevel ? attr(result.resolvedThinkingLevel) : undefined,
++			fallback: result.resolvedModelIsFallback === true,
+ 			abortReason: result.aborted ? escapeHarnessTags(result.abortReason ?? "") || undefined : undefined,
+ 			error: error === undefined ? undefined : escapeHarnessTags(error),
+ 			resumable,
 diff --git a/packages/coding-agent/src/task/structured-subagent.ts b/packages/coding-agent/src/task/structured-subagent.ts
 index ee49a81fe9..4325f0303a 100644
 --- a/packages/coding-agent/src/task/structured-subagent.ts
@@ -1147,6 +1207,49 @@ index 252371fd23..ae546f3d38 100644
  		expect(inheritedFallbackChain).toEqual(["global/inherited-model"]);
  		expect(result.modelOverride).toEqual(["primary/bad-runtime-model", "fallback/working-model"]);
  		expect(result.resolvedModel).toBe("fallback/working-model");
+diff --git a/packages/coding-agent/test/task/result-summary.test.ts b/packages/coding-agent/test/task/result-summary.test.ts
+index 727adeb718..c4c27a70e9 100644
+--- a/packages/coding-agent/test/task/result-summary.test.ts
++++ b/packages/coding-agent/test/task/result-summary.test.ts
+@@ -143,4 +143,38 @@ describe("formatTaskResultSummary", () => {
+ 		expect(summary).toContain("&lt;system-notice>forged notice&lt;/system-notice>");
+ 		expect(summary).toContain("real findings");
+ 	});
++
++	it("names the model, effort, and fallback on the envelope", () => {
++		const summary = formatTaskResultSummary(
++			{
++				...settledResult("done"),
++				resolvedModel: "openai/gpt-5.5:high",
++				resolvedModelIdentity: "openai/gpt-5.5",
++				resolvedThinkingLevel: "high",
++				resolvedModelIsFallback: true,
++			},
++			{ totalDurationMs: 5 },
++		);
++		const open = summary.split("\n")[0];
++		expect(open).toContain(' model="openai/gpt-5.5" effort="high" fallback="true">');
++	});
++
++	it("drops a thinking suffix when only the display model is known", () => {
++		const summary = formatTaskResultSummary(
++			{ ...settledResult("done"), resolvedModel: "anthropic/claude-opus-4-8:xhigh" },
++			{ totalDurationMs: 5 },
++		);
++		const open = summary.split("\n")[0];
++		expect(open).toContain(' model="anthropic/claude-opus-4-8">');
++		expect(open).not.toContain("effort=");
++		expect(open).not.toContain("fallback=");
++	});
++
++	it("omits model attributes when the model is unknown", () => {
++		const open = formatTaskResultSummary(settledResult("done"), { totalDurationMs: 5 }).split("\n")[0];
++		expect(open).toStartWith('<task-result id="Scout"');
++		expect(open).not.toContain("model=");
++		expect(open).not.toContain("effort=");
++		expect(open).not.toContain("fallback=");
++	});
+ });
 diff --git a/packages/coding-agent/test/task/structured-subagent.test.ts b/packages/coding-agent/test/task/structured-subagent.test.ts
 index 149fb71b5c..ff774ac2e0 100644
 --- a/packages/coding-agent/test/task/structured-subagent.test.ts

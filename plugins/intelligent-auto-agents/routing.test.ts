@@ -15,6 +15,10 @@ const {
 	DIFFICULTY_NAMES,
 	ORDINARY,
 	parseCatalog,
+	parseWorkerAccountPins,
+	parseAccountLabels,
+	matchOAuthAccount,
+	planWorkerAccountPins,
 	createCatalogReloader,
 	taskTypeEffortVaries,
 	modelDifficultyEffort,
@@ -91,8 +95,24 @@ describe("catalog v9", () => {
 		expect(catalog.nuances.length).toBeGreaterThan(0);
 		expect(catalog.planningReadiness.agents).toEqual(["plan"]);
 		expect(catalog.blockedDirectiveTargets).toEqual(["luna", "astra"]);
-		expect(catalog.poolLimits.ignoreQuota).toBeUndefined();
 		expect(catalog.jevInstructions.route.length).toBeGreaterThan(0);
+	});
+
+	test("parses worker account pins from a local file, not the catalog", () => {
+		expect(parseWorkerAccountPins("")).toBeUndefined();
+		expect(parseWorkerAccountPins("account: extra@example.com")).toEqual({ all: "extra@example.com", byProvider: {} });
+		expect(parseWorkerAccountPins("anthropic: extra@example.com")).toEqual({ byProvider: { anthropic: "extra@example.com" } });
+		expect(parseWorkerAccountPins("# comment\nextra@example.com\n")).toEqual({ all: "extra@example.com", byProvider: {} });
+		expect(parseWorkerAccountPins('{"anthropic":"extra@example.com"}')).toEqual({ byProvider: { anthropic: "extra@example.com" } });
+		const accounts = [
+			{ provider: "anthropic", credentialId: 1, email: "primary@example.com" },
+			{ provider: "anthropic", credentialId: 2, email: "extra@example.com" },
+		];
+		const noLabels = parseAccountLabels("");
+		expect(matchOAuthAccount(accounts, "extra@example.com", noLabels)?.credentialId).toBe(2);
+		expect(
+			planWorkerAccountPins({ byProvider: { anthropic: "extra@example.com" } }, provider => (provider === "anthropic" ? accounts : []), noLabels),
+		).toEqual([{ provider: "anthropic", credentialId: 2 }]);
 	});
 
 	test("rejects catalogs that break the routing contract", () => {
@@ -672,7 +692,7 @@ describe("catalog reloader", () => {
 			},
 			parseCatalog(catalogData),
 		);
-		expect(reloader.get().poolLimits.ignoreQuota).toBeUndefined();
+		expect(reloader.get().poolLimits.ignoreQuota).toEqual(["openai-codex"]);
 
 		const next = structuredClone(catalogData) as { poolLimits: { ignoreQuota?: string[] } };
 		next.poolLimits.ignoreQuota = ["anthropic"];

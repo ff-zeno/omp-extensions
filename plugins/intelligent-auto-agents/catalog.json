@@ -165,6 +165,7 @@
 		"clockSkewMs": 60000,
 		"failureDemoteAfter": 2,
 		"demoteForMs": 1800000,
+		"ignoreQuota": ["openai-codex"],
 		"burstPenaltyWindow": {
 			"*": "weekly"
 		}
