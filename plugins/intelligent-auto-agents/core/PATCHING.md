@@ -32,8 +32,8 @@ Set the version numbers and the paths once:
 
 ```sh
 CORE="$PWD/omp/public/omp-extensions/plugins/intelligent-auto-agents/core"
-OLD=18.6.1
-NEW=18.7.0
+OLD=19.1.1
+NEW=19.2.1
 CLONE="$PWD/.tmp/oh-my-pi-v$NEW"
 ```
 
@@ -138,9 +138,10 @@ Adds `routing` to the allowed-argument lists for the JS `agent()` and `workpool(
 
 Adds a `routing=None` parameter to the Python `agent()` and `workpool()` helpers and forwards it to the bridge.
 
-### packages/tui/src/tools/task.ts
+### packages/coding-agent/src/task/task-details.ts
 
 Adds `routing?: "auto" | "off"` to `TaskItem` and `TaskParams`.
+These types lived in `packages/tui/src/tools/task.ts` until 19.2.0 rebuilt the TUI and moved them here.
 
 ### Test files
 

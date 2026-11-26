@@ -31,7 +31,13 @@ else
   exit 1
 fi
 
+# Git Bash on Windows: `command -v omp` drops the .exe suffix the real file carries.
+EXE=""
+case "$(uname -s)" in
+  MINGW*|MSYS*|CYGWIN*) EXE=".exe" ;;
+esac
 TARGET="${OMP_BIN:-$(command -v omp || printf '%s' "$HOME/.local/bin/omp")}"
+[[ -n "$EXE" && "$TARGET" != *.exe ]] && TARGET="$TARGET$EXE"
 if [[ -L "$TARGET" ]]; then
   printf 'Refusing to replace %s: it is a symlink. Point OMP_BIN at the real binary.\n' "$TARGET" >&2
   exit 1
@@ -165,6 +171,7 @@ if ! native_ready; then
     Linux:aarch64) native_platform="linux-arm64" ;;
     Darwin:x86_64) native_platform="darwin-x64" ;;
     Darwin:arm64) native_platform="darwin-arm64" ;;
+    MINGW*:x86_64|MSYS*:x86_64|CYGWIN*:x86_64) native_platform="win32-x64" ;;
   esac
   if [[ -n "$native_platform" && -d "$cached_native_dir" ]]; then
     shopt -s nullglob
@@ -206,7 +213,7 @@ fi
 bun --cwd="$SOURCE" -e 'import { SUBAGENT_ROUTING_API_VERSION, getSupportedEfforts } from "./packages/coding-agent/src/index.ts"; if (SUBAGENT_ROUTING_API_VERSION !== 2 || typeof getSupportedEfforts !== "function") throw new Error("subagent routing API v2 unavailable");'
 
 bun --cwd="$SOURCE/packages/coding-agent" run build
-BUILT="$SOURCE/packages/coding-agent/dist/omp"
+BUILT="$SOURCE/packages/coding-agent/dist/omp$EXE"
 built_version="$("$BUILT" --version)"
 if [[ "$built_version" != "omp/$VERSION" ]]; then
   printf 'Built binary reports %s, expected omp/%s. The installed binary was NOT changed.\n' "$built_version" "$VERSION" >&2
@@ -231,6 +238,12 @@ tmp="$(mktemp "${TARGET}.XXXXXX")"
 trap 'rm -f "$tmp"' EXIT
 cp -f -- "$BUILT" "$tmp"
 chmod 0755 "$tmp"
+# Windows refuses to overwrite a running executable but allows renaming it,
+# so move the old binary aside first; a later run removes the leftover.
+if [[ -n "$EXE" && -f "$TARGET" ]]; then
+  rm -f -- "$TARGET.prev" 2>/dev/null || true
+  mv -f -- "$TARGET" "$TARGET.prev"
+fi
 mv -f -- "$tmp" "$TARGET"
 trap - EXIT
 

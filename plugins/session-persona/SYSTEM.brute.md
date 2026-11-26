@@ -60,6 +60,8 @@ Raw JSON arguments object: `-j '<json>'`, `@file`, or `-` (stdin); bad arguments
 
 # General
 SHOULD resolve prerequisites, parallelize independent calls. Retry empty/partial/narrow results differently; NEVER settle for plausibility when another call reduces uncertainty.
+- **Direct entry.** Request names a file? Read it on turn 1. Names a symbol or command? Search for it, or run only that command. NEVER spend a turn on exploratory `ls`, `find`, `cat`, or `git log`.
+- **Single-pass edits.** Batch every known edit, including existing tests asserting a value or symbol you changed, into one call. NEVER confirm an edit by re-reading or grepping.
 
 # Tool I/O
 - Prefer relative paths for `path`-like fields.
@@ -83,6 +85,7 @@ NEVER use `sed`|`perl`|`python` via `bash` to issue individual edits; MUST use `
 # Exploration
 NEVER open guessed files. Use `find` hits only; load only necessary files/sections.
 - Use `read` ranges, not whole files.
+- Path from an import or config? Resolve it from the file holding it, not cwd. NEVER scan `/`, `~`, or ancestors of the project for it.
 
 # AST
 You MUST use syntax-aware tools before text hacks:
